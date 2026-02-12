@@ -1,348 +1,428 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-type Person = {
+type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavailable';
+
+type UserProfile = {
   id: string;
   name: string;
-  role: 'Host' | 'Speaker';
-  availableSlots: string[];
+  isHost: boolean;
 };
 
-type Session = {
-  id: string;
-  title: string;
-  slot: string;
-  hostId: string;
-  speakerId: string;
-  campaign: string;
-  status: 'Draft' | 'Confirmed';
+type AvailabilityByUser = Record<string, Record<string, AvailabilityStatus>>;
+
+type PersistedState = {
+  activeUserId: string;
+  availability: AvailabilityByUser;
 };
 
-const campaigns = ['Q1 Product Launch', 'Education Webinar Series', 'Community Outreach'];
+const STORAGE_KEY = 'dnd_scheduler_state_v1';
+const STATUS_CYCLE: AvailabilityStatus[] = ['unspecified', 'available', 'maybe', 'unavailable'];
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-const peopleSeed: Person[] = [
-  {
-    id: 'p1',
-    name: 'Alex Rivera',
-    role: 'Host',
-    availableSlots: ['Mon 10:00', 'Tue 14:00', 'Thu 09:00']
-  },
-  {
-    id: 'p2',
-    name: 'Priya Shah',
-    role: 'Host',
-    availableSlots: ['Mon 10:00', 'Wed 11:00', 'Fri 15:00']
-  },
-  {
-    id: 'p3',
-    name: 'Jordan Kim',
-    role: 'Speaker',
-    availableSlots: ['Tue 14:00', 'Wed 11:00', 'Thu 09:00']
-  },
-  {
-    id: 'p4',
-    name: 'Sam Carter',
-    role: 'Speaker',
-    availableSlots: ['Mon 10:00', 'Thu 09:00', 'Fri 15:00']
-  }
+const usersSeed: UserProfile[] = [
+  { id: 'u1', name: 'Avery (Host)', isHost: true },
+  { id: 'u2', name: 'Morgan', isHost: false },
+  { id: 'u3', name: 'Riley', isHost: false },
+  { id: 'u4', name: 'Jordan', isHost: false }
 ];
 
-const sessionsSeed: Session[] = [
-  {
-    id: 's1',
-    title: 'Launch Messaging Review',
-    slot: 'Mon 10:00',
-    hostId: 'p1',
-    speakerId: 'p4',
-    campaign: 'Q1 Product Launch',
-    status: 'Confirmed'
-  },
-  {
-    id: 's2',
-    title: 'Webinar Prep',
-    slot: 'Wed 11:00',
-    hostId: 'p2',
-    speakerId: 'p3',
-    campaign: 'Education Webinar Series',
-    status: 'Draft'
+function padTwo(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function toDateKey(date: Date): string {
+  return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}-${padTwo(date.getDate())}`;
+}
+
+function getCurrentMonthDates(reference = new Date()): Date[] {
+  const year = reference.getFullYear();
+  const month = reference.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const dates: Date[] = [];
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    dates.push(new Date(year, month, day));
   }
-];
 
-function HomePage({
-  selectedCampaign,
-  sessions,
-  people
-}: {
-  selectedCampaign: string;
-  sessions: Session[];
-  people: Person[];
-}) {
-  const campaignSessions = sessions.filter((session) => session.campaign === selectedCampaign);
-  const confirmedCount = campaignSessions.filter((session) => session.status === 'Confirmed').length;
-  const uniquePeople = new Set(
-    campaignSessions.flatMap((session) => [session.hostId, session.speakerId])
-  ).size;
+  return dates;
+}
 
+function getMonthLabel(dates: Date[]): string {
+  if (dates.length === 0) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    year: 'numeric'
+  }).format(dates[0]);
+}
+
+function formatDateKey(dateKey: string): string {
+  const [yearPart, monthPart, dayPart] = dateKey.split('-');
+  const year = Number(yearPart);
+  const month = Number(monthPart);
+  const day = Number(dayPart);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return dateKey;
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  }).format(new Date(year, month - 1, day));
+}
+
+function isAvailabilityStatus(value: unknown): value is AvailabilityStatus {
   return (
-    <section className="page-card">
-      <h2>POC Dashboard</h2>
-      <p>
-        This proof of concept tracks campaign scheduling, role-based availability, and conflict checks
-        before final confirmation.
-      </p>
-      <div className="kpi-grid">
-        <article>
-          <h3>{campaignSessions.length}</h3>
-          <p>Scheduled Sessions</p>
-        </article>
-        <article>
-          <h3>{confirmedCount}</h3>
-          <p>Confirmed Sessions</p>
-        </article>
-        <article>
-          <h3>{uniquePeople}</h3>
-          <p>People Assigned</p>
-        </article>
-        <article>
-          <h3>{people.length}</h3>
-          <p>Total Team Members</p>
-        </article>
-      </div>
-    </section>
+    typeof value === 'string' &&
+    (value === 'unspecified' || value === 'available' || value === 'maybe' || value === 'unavailable')
   );
 }
 
-function CampaignsPage({ selectedCampaign, sessions }: { selectedCampaign: string; sessions: Session[] }) {
-  const campaignSessions = sessions.filter((session) => session.campaign === selectedCampaign);
+function sanitizeAvailability(raw: unknown): AvailabilityByUser {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+
+  const clean: AvailabilityByUser = {};
+
+  for (const [userId, userValue] of Object.entries(raw as Record<string, unknown>)) {
+    if (!userValue || typeof userValue !== 'object') {
+      continue;
+    }
+
+    const cleanUserDays: Record<string, AvailabilityStatus> = {};
+
+    for (const [dateKey, statusValue] of Object.entries(userValue as Record<string, unknown>)) {
+      if (isAvailabilityStatus(statusValue)) {
+        cleanUserDays[dateKey] = statusValue;
+      }
+    }
+
+    clean[userId] = cleanUserDays;
+  }
+
+  return clean;
+}
+
+function loadInitialState(users: UserProfile[]): PersistedState {
+  const fallback: PersistedState = {
+    activeUserId: users[0]?.id ?? '',
+    availability: {}
+  };
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return fallback;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PersistedState>;
+    const activeUserId =
+      typeof parsed.activeUserId === 'string' && users.some((user) => user.id === parsed.activeUserId)
+        ? parsed.activeUserId
+        : fallback.activeUserId;
+
+    return {
+      activeUserId,
+      availability: sanitizeAvailability(parsed.availability)
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function getNextStatus(current: AvailabilityStatus): AvailabilityStatus {
+  const currentIndex = STATUS_CYCLE.indexOf(current);
+  const nextIndex = (currentIndex + 1) % STATUS_CYCLE.length;
+  return STATUS_CYCLE[nextIndex];
+}
+
+function getStatusLabel(status: AvailabilityStatus): string {
+  if (status === 'available') {
+    return 'Available';
+  }
+
+  if (status === 'maybe') {
+    return 'Maybe';
+  }
+
+  if (status === 'unavailable') {
+    return 'Unavailable';
+  }
+
+  return 'Unspecified';
+}
+
+function PersonalAvailabilityPage({
+  users,
+  activeUserId,
+  setActiveUserId,
+  monthDates,
+  getStatus,
+  onToggleDate
+}: {
+  users: UserProfile[];
+  activeUserId: string;
+  setActiveUserId: (value: string) => void;
+  monthDates: Date[];
+  getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
+  onToggleDate: (dateKey: string) => void;
+}) {
+  const monthLabel = getMonthLabel(monthDates);
+  const activeUser = users.find((user) => user.id === activeUserId) ?? users[0];
+  const leadingEmptyCells = monthDates.length > 0 ? (monthDates[0].getDay() + 6) % 7 : 0;
+
+  const gridCells: Array<Date | null> = [
+    ...Array.from({ length: leadingEmptyCells }, () => null),
+    ...monthDates
+  ];
+
+  const trailingEmptyCells = (7 - (gridCells.length % 7)) % 7;
+  gridCells.push(...Array.from({ length: trailingEmptyCells }, () => null));
 
   return (
     <section className="page-card">
-      <h2>{selectedCampaign}</h2>
-      <p>Current session pipeline for this campaign.</p>
-      <ul className="list-reset">
-        {campaignSessions.map((session) => (
-          <li key={session.id} className="session-row">
-            <strong>{session.title}</strong>
-            <span>{session.slot}</span>
-            <span className={`status-pill status-${session.status.toLowerCase()}`}>{session.status}</span>
-          </li>
+      <h2>My Availability</h2>
+      <p>Pick your profile, then click each day to cycle status.</p>
+
+      <label className="profile-picker" htmlFor="profile-select">
+        Active Profile
+        <select
+          id="profile-select"
+          value={activeUserId}
+          onChange={(event) => setActiveUserId(event.target.value)}
+        >
+          {users.map((user) => (
+            <option key={user.id} value={user.id}>
+              {user.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <h3 className="month-heading">{monthLabel}</h3>
+
+      <div className="legend" aria-label="Availability legend">
+        <span className="legend-item">
+          <i className="chip chip-unspecified" /> Unspecified
+        </span>
+        <span className="legend-item">
+          <i className="chip chip-available" /> Available
+        </span>
+        <span className="legend-item">
+          <i className="chip chip-maybe" /> Maybe
+        </span>
+        <span className="legend-item">
+          <i className="chip chip-unavailable" /> Unavailable
+        </span>
+      </div>
+
+      <div className="calendar-grid" role="grid" aria-label={`${monthLabel} availability calendar`}>
+        {WEEKDAY_LABELS.map((weekday) => (
+          <div key={weekday} className="weekday-cell" role="columnheader">
+            {weekday}
+          </div>
         ))}
-        {campaignSessions.length === 0 ? <li>No sessions yet.</li> : null}
-      </ul>
-    </section>
-  );
-}
 
-function AvailabilityPage({
-  people,
-  slots
-}: {
-  people: Person[];
-  slots: string[];
-}) {
-  return (
-    <section className="page-card">
-      <h2>Availability Matrix</h2>
-      <p>Simple view of who can attend each potential slot.</p>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Team Member</th>
-              <th>Role</th>
-              {slots.map((slot) => (
-                <th key={slot}>{slot}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {people.map((person) => (
-              <tr key={person.id}>
-                <td>{person.name}</td>
-                <td>{person.role}</td>
-                {slots.map((slot) => (
-                  <td key={`${person.id}-${slot}`}>
-                    {person.availableSlots.includes(slot) ? <span className="check">Yes</span> : 'No'}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function ProposedSessionsPage({
-  selectedCampaign,
-  people,
-  sessions,
-  addSession
-}: {
-  selectedCampaign: string;
-  people: Person[];
-  sessions: Session[];
-  addSession: (session: Omit<Session, 'id' | 'status'>) => void;
-}) {
-  const hosts = people.filter((person) => person.role === 'Host');
-  const speakers = people.filter((person) => person.role === 'Speaker');
-  const slots = useMemo(() => Array.from(new Set(people.flatMap((person) => person.availableSlots))), [people]);
-
-  const [title, setTitle] = useState('');
-  const [slot, setSlot] = useState(slots[0] ?? '');
-  const [hostId, setHostId] = useState(hosts[0]?.id ?? '');
-  const [speakerId, setSpeakerId] = useState(speakers[0]?.id ?? '');
-
-  const conflicts = useMemo(() => {
-    if (!slot || !hostId || !speakerId) {
-      return [];
-    }
-
-    const items: string[] = [];
-    const host = people.find((person) => person.id === hostId);
-    const speaker = people.find((person) => person.id === speakerId);
-    const sameSlotSessions = sessions.filter((session) => session.slot === slot);
-
-    if (host && !host.availableSlots.includes(slot)) {
-      items.push(`${host.name} is not available at ${slot}.`);
-    }
-
-    if (speaker && !speaker.availableSlots.includes(slot)) {
-      items.push(`${speaker.name} is not available at ${slot}.`);
-    }
-
-    if (sameSlotSessions.some((session) => session.hostId === hostId || session.speakerId === hostId)) {
-      items.push('Selected host already has a session at this time.');
-    }
-
-    if (
-      sameSlotSessions.some(
-        (session) => session.hostId === speakerId || session.speakerId === speakerId
-      )
-    ) {
-      items.push('Selected speaker already has a session at this time.');
-    }
-
-    return items;
-  }, [slot, hostId, speakerId, people, sessions]);
-
-  const canSubmit = title.trim().length > 2 && conflicts.length === 0;
-
-  return (
-    <section className="page-card">
-      <h2>Propose Session</h2>
-      <p>Create a draft session with immediate conflict checks.</p>
-      <form
-        className="form-grid"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!canSubmit) {
-            return;
+        {gridCells.map((date, index) => {
+          if (!date) {
+            return <div key={`empty-${index}`} className="day-cell empty-cell" aria-hidden="true" />;
           }
 
-          addSession({
-            title: title.trim(),
-            slot,
-            hostId,
-            speakerId,
-            campaign: selectedCampaign
-          });
+          const dateKey = toDateKey(date);
+          const status = getStatus(activeUser.id, dateKey);
 
-          setTitle('');
-        }}
-      >
-        <label>
-          Session title
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Example: Customer Success Story"
-          />
-        </label>
-        <label>
-          Timeslot
-          <select value={slot} onChange={(event) => setSlot(event.target.value)}>
-            {slots.map((slotOption) => (
-              <option key={slotOption} value={slotOption}>
-                {slotOption}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Host
-          <select value={hostId} onChange={(event) => setHostId(event.target.value)}>
-            {hosts.map((host) => (
-              <option key={host.id} value={host.id}>
-                {host.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Speaker
-          <select value={speakerId} onChange={(event) => setSpeakerId(event.target.value)}>
-            {speakers.map((speaker) => (
-              <option key={speaker.id} value={speaker.id}>
-                {speaker.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={!canSubmit}>
-          Add Draft Session
-        </button>
-      </form>
+          return (
+            <button
+              key={dateKey}
+              type="button"
+              className={`day-cell day-${status}`}
+              role="gridcell"
+              onClick={() => onToggleDate(dateKey)}
+              aria-label={`${formatDateKey(dateKey)}: ${getStatusLabel(status)}`}
+            >
+              <span className="day-number">{date.getDate()}</span>
+              <span className="day-status">{getStatusLabel(status)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
-      {conflicts.length > 0 ? (
-        <ul className="conflict-list">
-          {conflicts.map((conflict) => (
-            <li key={conflict}>{conflict}</li>
-          ))}
-        </ul>
-      ) : (
-        <p className="ok-state">No conflicts detected for this setup.</p>
-      )}
+function HostSummaryPage({
+  users,
+  activeUserId,
+  monthDateKeys,
+  getStatus
+}: {
+  users: UserProfile[];
+  activeUserId: string;
+  monthDateKeys: string[];
+  getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
+}) {
+  const activeUser = users.find((user) => user.id === activeUserId) ?? users[0];
+
+  if (!activeUser?.isHost) {
+    return (
+      <section className="page-card">
+        <h2>Host Summary</h2>
+        <p>This page is host-only. Switch to the host profile to view group-wide availability.</p>
+      </section>
+    );
+  }
+
+  const allGreenDates = monthDateKeys.filter((dateKey) =>
+    users.every((user) => getStatus(user.id, dateKey) === 'available')
+  );
+
+  const anyRedDates = monthDateKeys.filter((dateKey) =>
+    users.some((user) => getStatus(user.id, dateKey) === 'unavailable')
+  );
+
+  return (
+    <section className="page-card">
+      <h2>Host Summary</h2>
+      <p>Dates below are based on current-month availability for all group members.</p>
+
+      <div className="kpi-grid">
+        <article>
+          <h3>{users.length}</h3>
+          <p>Total Group Members</p>
+        </article>
+        <article>
+          <h3>{allGreenDates.length}</h3>
+          <p>Dates Fully Green</p>
+        </article>
+        <article>
+          <h3>{anyRedDates.length}</h3>
+          <p>Dates With Any Red</p>
+        </article>
+      </div>
+
+      <section className="summary-block">
+        <h3>Best Candidate Dates (Everyone Green)</h3>
+        {allGreenDates.length === 0 ? (
+          <p className="empty-note">No dates are fully green yet.</p>
+        ) : (
+          <ul className="list-reset">
+            {allGreenDates.map((dateKey) => (
+              <li key={dateKey} className="summary-row">
+                {formatDateKey(dateKey)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="summary-block">
+        <h3>Availability Matrix</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                {users.map((user) => (
+                  <th key={user.id}>{user.name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {monthDateKeys.map((dateKey) => (
+                <tr key={dateKey}>
+                  <td>{formatDateKey(dateKey)}</td>
+                  {users.map((user) => {
+                    const status = getStatus(user.id, dateKey);
+                    return (
+                      <td key={`${dateKey}-${user.id}`}>
+                        <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
   );
 }
 
 export default function App() {
-  const [selectedCampaign, setSelectedCampaign] = useState(campaigns[0]);
-  const [sessions, setSessions] = useState<Session[]>(sessionsSeed);
-  const allSlots = useMemo(
-    () => Array.from(new Set(peopleSeed.flatMap((person) => person.availableSlots))),
-    []
-  );
+  const users = usersSeed;
+  const monthDates = useMemo(() => getCurrentMonthDates(new Date()), []);
+  const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
+
+  const [state, setState] = useState<PersistedState>(() => loadInitialState(users));
+
+  const activeUserId = users.some((user) => user.id === state.activeUserId)
+    ? state.activeUserId
+    : users[0]?.id ?? '';
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          activeUserId,
+          availability: state.availability
+        })
+      );
+    } catch {
+      // Ignore localStorage write errors to keep UI functional.
+    }
+  }, [activeUserId, state.availability]);
+
+  const getStatus = (userId: string, dateKey: string): AvailabilityStatus => {
+    return state.availability[userId]?.[dateKey] ?? 'unspecified';
+  };
+
+  const setActiveUserId = (nextUserId: string): void => {
+    setState((current) => ({ ...current, activeUserId: nextUserId }));
+  };
+
+  const onToggleDate = (dateKey: string): void => {
+    if (!activeUserId) {
+      return;
+    }
+
+    setState((current) => {
+      const userDays = current.availability[activeUserId] ?? {};
+      const currentStatus = userDays[dateKey] ?? 'unspecified';
+      const nextStatus = getNextStatus(currentStatus);
+
+      return {
+        ...current,
+        availability: {
+          ...current.availability,
+          [activeUserId]: {
+            ...userDays,
+            [dateKey]: nextStatus
+          }
+        }
+      };
+    });
+  };
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Scheduling App</h1>
-        <label className="campaign-switcher" htmlFor="campaign-select">
-          Campaign
-          <select
-            id="campaign-select"
-            value={selectedCampaign}
-            onChange={(event) => setSelectedCampaign(event.target.value)}
-          >
-            {campaigns.map((campaign) => (
-              <option key={campaign} value={campaign}>
-                {campaign}
-              </option>
-            ))}
-          </select>
-        </label>
+        <h1>DnD Group Scheduler</h1>
+        <p>Paint availability by day, then let the host find fully green dates.</p>
       </header>
 
       <nav className="top-nav" aria-label="Primary">
         <NavLink to="/" end>
-          Home
+          My Availability
         </NavLink>
-        <NavLink to="/campaigns">Campaigns</NavLink>
-        <NavLink to="/availability">Availability</NavLink>
-        <NavLink to="/proposed-sessions">Proposed Sessions</NavLink>
+        <NavLink to="/host">Host Summary</NavLink>
       </nav>
 
       <main>
@@ -350,30 +430,24 @@ export default function App() {
           <Route
             path="/"
             element={
-              <HomePage selectedCampaign={selectedCampaign} sessions={sessions} people={peopleSeed} />
+              <PersonalAvailabilityPage
+                users={users}
+                activeUserId={activeUserId}
+                setActiveUserId={setActiveUserId}
+                monthDates={monthDates}
+                getStatus={getStatus}
+                onToggleDate={onToggleDate}
+              />
             }
           />
           <Route
-            path="/campaigns"
-            element={<CampaignsPage selectedCampaign={selectedCampaign} sessions={sessions} />}
-          />
-          <Route
-            path="/availability"
-            element={<AvailabilityPage people={peopleSeed} slots={allSlots} />}
-          />
-          <Route
-            path="/proposed-sessions"
+            path="/host"
             element={
-              <ProposedSessionsPage
-                selectedCampaign={selectedCampaign}
-                people={peopleSeed}
-                sessions={sessions}
-                addSession={(session) =>
-                  setSessions((current) => [
-                    ...current,
-                    { ...session, id: `s${current.length + 1}`, status: 'Draft' }
-                  ])
-                }
+              <HostSummaryPage
+                users={users}
+                activeUserId={activeUserId}
+                monthDateKeys={monthDateKeys}
+                getStatus={getStatus}
               />
             }
           />
