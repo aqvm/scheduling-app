@@ -18,6 +18,7 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 2. In Firebase Console, enable `Authentication -> Sign-in method -> Anonymous`.
 3. Create a Firestore database in production mode.
 4. Copy `.env.example` to `.env.local` and fill in your Firebase values.
+5. In GitHub repo settings, add Actions secrets for Firebase (list below).
 
 Required env vars:
 
@@ -39,37 +40,43 @@ VITE_FIREBASE_APP_NAMESPACE=default
 Suggested Firestore security rules for this app:
 
 ```txt
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function isAdmin(uid) {
-      return get(/databases/$(database)/documents/apps/default/users/$(uid)).data.role == 'admin';
-    }
-
-    match /apps/default/users/{userId} {
-      allow read: if signedIn();
-      allow create: if signedIn() && request.auth.uid == userId;
-      allow update: if signedIn() && request.auth.uid == userId;
-    }
-
-    match /apps/default/availability/{userId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && request.auth.uid == userId;
-    }
-
-    match /apps/default/meta/settings {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && isAdmin(request.auth.uid);
-    }
-  }
-}
+Copy from `firestore.rules` in this repo.
 ```
 
-If you use a different `VITE_FIREBASE_APP_NAMESPACE`, update rules paths to match.
+GitHub Actions secrets expected by `.github/workflows/deploy.yml`:
+
+Required:
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+
+Optional:
+
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_APP_NAMESPACE` (defaults to `default`)
+- `VITE_MEMBER_INVITE_CODE` (defaults to `party-members`)
+- `VITE_ADMIN_INVITE_CODE` (defaults to `owner-admin`)
+
+## Firestore Rules Deploy (Optional CLI)
+
+If you want rules versioned/deployed from this repo:
+
+1. Install Firebase CLI:
+
+```bash
+npm i -g firebase-tools
+```
+
+2. Copy `.firebaserc.example` to `.firebaserc` and set your Firebase project ID.
+3. Login and deploy rules:
+
+```bash
+firebase login
+firebase deploy --only firestore:rules
+```
 
 ## Invite Code Setup
 
