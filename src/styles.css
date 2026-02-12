@@ -153,6 +153,12 @@ select {
   transform: translateY(-1px);
 }
 
+.primary-button:disabled {
+  cursor: not-allowed;
+  transform: none;
+  opacity: 0.5;
+}
+
 .ghost-button {
   background: rgba(10, 22, 36, 0.9);
   color: #bcd1e8;
@@ -199,6 +205,19 @@ select {
   gap: 0.65rem;
   flex-wrap: wrap;
   margin: 0.95rem 0;
+}
+
+.save-row {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  margin-bottom: 0.95rem;
+  flex-wrap: wrap;
+}
+
+.save-note {
+  font-size: 0.88rem;
+  color: #9ab1c8;
 }
 
 .paint-button {

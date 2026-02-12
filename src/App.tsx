@@ -20,6 +20,7 @@ type PersistedState = {
   hostUserId: string;
   availability: AvailabilityByUser;
 };
+type PendingEditsByUser = Record<string, Record<string, AvailabilityStatus>>;
 
 const MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
 const ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
@@ -242,7 +243,10 @@ function PersonalAvailabilityPage({
   getStatus,
   onStartPaint,
   onPaintWhileDragging,
-  onPaintDate
+  onPaintDate,
+  hasUnsavedChanges,
+  isSaving,
+  onSaveChanges
 }: {
   currentUser: UserProfile;
   monthDates: Date[];
@@ -254,6 +258,9 @@ function PersonalAvailabilityPage({
   onStartPaint: (dateKey: string) => void;
   onPaintWhileDragging: (dateKey: string) => void;
   onPaintDate: (dateKey: string) => void;
+  hasUnsavedChanges: boolean;
+  isSaving: boolean;
+  onSaveChanges: () => void;
 }) {
   const monthLabel = getMonthLabel(monthDates);
   const selectedMonthParts = parseMonthValue(monthValue);
@@ -320,6 +327,18 @@ function PersonalAvailabilityPage({
             {option.label}
           </button>
         ))}
+      </div>
+
+      <div className="save-row">
+        <button
+          type="button"
+          className="primary-button"
+          onClick={onSaveChanges}
+          disabled={!hasUnsavedChanges || isSaving}
+        >
+          {isSaving ? 'Saving...' : 'Save Changes'}
+        </button>
+        <span className="save-note">{hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved'}</span>
       </div>
 
       <div className="calendar-grid" role="grid" aria-label={`${monthLabel} availability calendar`}>
@@ -514,19 +533,24 @@ export default function App() {
     hostUserId: '',
     availability: {}
   });
+  const [pendingEdits, setPendingEdits] = useState<PendingEditsByUser>({});
   const [authUserId, setAuthUserId] = useState('');
   const [sessionUserId, setSessionUserId] = useState('');
   const [authReady, setAuthReady] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toMonthValue(new Date()));
   const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
+  const [isSavingChanges, setIsSavingChanges] = useState(false);
   const [isPainting, setIsPainting] = useState(false);
   const [signInError, setSignInError] = useState('');
+  const [appError, setAppError] = useState('');
 
   const currentUser = state.users.find((user) => user.id === sessionUserId) ?? null;
   const hostUser = state.users.find((user) => user.id === state.hostUserId) ?? null;
   const canViewHostSummary =
     currentUser !== null && (currentUser.role === 'admin' || currentUser.id === state.hostUserId);
+  const currentUserPendingEdits = currentUser ? pendingEdits[currentUser.id] ?? {} : {};
+  const hasUnsavedChanges = Object.keys(currentUserPendingEdits).length > 0;
   const monthDates = useMemo(() => getMonthDates(selectedMonth), [selectedMonth]);
   const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
 
@@ -703,6 +727,50 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const userId = currentUser.id;
+    const userPending = pendingEdits[userId];
+    if (!userPending || Object.keys(userPending).length === 0) {
+      return;
+    }
+
+    const userServerDays = state.availability[userId] ?? {};
+    const nextPending: Record<string, AvailabilityStatus> = {};
+
+    for (const [dateKey, status] of Object.entries(userPending)) {
+      const serverStatus = userServerDays[dateKey] ?? 'unspecified';
+      if (serverStatus !== status) {
+        nextPending[dateKey] = status;
+      }
+    }
+
+    const pendingEntries = Object.entries(userPending);
+    const nextEntries = Object.entries(nextPending);
+    const isEqual =
+      pendingEntries.length === nextEntries.length &&
+      pendingEntries.every(([dateKey, status]) => nextPending[dateKey] === status);
+
+    if (isEqual) {
+      return;
+    }
+
+    setPendingEdits((current) => {
+      if (Object.keys(nextPending).length === 0) {
+        const { [userId]: _removed, ...rest } = current;
+        return rest;
+      }
+
+      return {
+        ...current,
+        [userId]: nextPending
+      };
+    });
+  }, [currentUser, pendingEdits, state.availability]);
+
+  useEffect(() => {
     const settingsRef = getSettingsDocumentRef();
     if (!settingsRef || state.users.length === 0 || state.hostUserId) {
       return;
@@ -712,6 +780,11 @@ export default function App() {
   }, [state.users, state.hostUserId]);
 
   const getStatus = (userId: string, dateKey: string): AvailabilityStatus => {
+    const pendingStatus = pendingEdits[userId]?.[dateKey];
+    if (pendingStatus) {
+      return pendingStatus;
+    }
+
     return state.availability[userId]?.[dateKey] ?? 'unspecified';
   };
 
@@ -720,46 +793,29 @@ export default function App() {
       return;
     }
 
-    const availabilityRef = getAvailabilityCollectionRef();
-    if (!availabilityRef) {
-      return;
-    }
+    const currentUserId = currentUser.id;
+    const serverStatus = state.availability[currentUserId]?.[dateKey] ?? 'unspecified';
+    const nextStatus = selectedPaintStatus;
 
-    let nextDays: Record<string, AvailabilityStatus> | null = null;
+    setPendingEdits((current) => {
+      const userPending = current[currentUserId] ?? {};
+      const nextPending = { ...userPending };
 
-    setState((current) => {
-      const userDays = current.availability[currentUser.id] ?? {};
-      if (userDays[dateKey] === selectedPaintStatus) {
-        return current;
+      if (nextStatus === serverStatus) {
+        delete nextPending[dateKey];
+      } else {
+        nextPending[dateKey] = nextStatus;
       }
 
-      nextDays = {
-        ...userDays,
-        [dateKey]: selectedPaintStatus
-      };
+      if (Object.keys(nextPending).length === 0) {
+        const { [currentUserId]: _removed, ...rest } = current;
+        return rest;
+      }
 
       return {
         ...current,
-        availability: {
-          ...current.availability,
-          [currentUser.id]: nextDays
-        }
+        [currentUserId]: nextPending
       };
-    });
-
-    if (!nextDays) {
-      return;
-    }
-
-    void setDoc(
-      doc(availabilityRef, currentUser.id),
-      {
-        days: nextDays,
-        updatedAt: serverTimestamp()
-      },
-      { merge: true }
-    ).catch(() => {
-      setSignInError('Unable to save availability update.');
     });
   };
 
@@ -774,6 +830,52 @@ export default function App() {
     }
 
     paintDate(dateKey);
+  };
+
+  const onSaveChanges = (): void => {
+    if (!currentUser || isSavingChanges) {
+      return;
+    }
+
+    const userPendingEdits = pendingEdits[currentUser.id];
+    if (!userPendingEdits || Object.keys(userPendingEdits).length === 0) {
+      return;
+    }
+
+    const availabilityRef = getAvailabilityCollectionRef();
+    if (!availabilityRef) {
+      setAppError('Firebase is not configured.');
+      return;
+    }
+
+    const nextDays = {
+      ...(state.availability[currentUser.id] ?? {}),
+      ...userPendingEdits
+    };
+
+    setIsSavingChanges(true);
+    setAppError('');
+
+    void setDoc(
+      doc(availabilityRef, currentUser.id),
+      {
+        days: nextDays,
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    )
+      .then(() => {
+        setPendingEdits((current) => {
+          const { [currentUser.id]: _removed, ...rest } = current;
+          return rest;
+        });
+      })
+      .catch(() => {
+        setAppError('Unable to save availability changes.');
+      })
+      .finally(() => {
+        setIsSavingChanges(false);
+      });
   };
 
   const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
@@ -855,6 +957,7 @@ export default function App() {
       .then(() => {
         setSessionUserId(authUserId);
         setSignInError('');
+        setAppError('');
       })
       .catch((error: unknown) => {
         if (error instanceof Error) {
@@ -882,21 +985,24 @@ export default function App() {
     }));
 
     void setDoc(settingsRef, { hostUserId: userId, updatedAt: serverTimestamp() }, { merge: true }).catch(() => {
-      setSignInError('Unable to update host assignment.');
+      setAppError('Unable to update host assignment.');
     });
   };
 
   const onSignOut = (): void => {
     setSessionUserId('');
     setSignInError('');
+    setAppError('');
     setIsPainting(false);
+    setPendingEdits({});
+    setIsSavingChanges(false);
 
     if (!auth) {
       return;
     }
 
     void signOut(auth).catch(() => {
-      setSignInError('Unable to sign out cleanly.');
+      setAppError('Unable to sign out cleanly.');
     });
   };
 
@@ -957,6 +1063,7 @@ export default function App() {
         <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
           Sign Out
         </button>
+        {appError ? <p className="form-error">{appError}</p> : null}
       </header>
 
       <nav className="top-nav" aria-label="Primary">
@@ -983,6 +1090,9 @@ export default function App() {
                 onStartPaint={onStartPaint}
                 onPaintWhileDragging={onPaintWhileDragging}
                 onPaintDate={paintDate}
+                hasUnsavedChanges={hasUnsavedChanges}
+                isSaving={isSavingChanges}
+                onSaveChanges={onSaveChanges}
               />
             }
           />
@@ -1009,6 +1119,9 @@ export default function App() {
                   onStartPaint={onStartPaint}
                   onPaintWhileDragging={onPaintWhileDragging}
                   onPaintDate={paintDate}
+                  hasUnsavedChanges={hasUnsavedChanges}
+                  isSaving={isSavingChanges}
+                  onSaveChanges={onSaveChanges}
                 />
               )
             }
@@ -1038,6 +1151,9 @@ export default function App() {
                 onStartPaint={onStartPaint}
                 onPaintWhileDragging={onPaintWhileDragging}
                 onPaintDate={paintDate}
+                hasUnsavedChanges={hasUnsavedChanges}
+                isSaving={isSavingChanges}
+                onSaveChanges={onSaveChanges}
               />
             }
           />
