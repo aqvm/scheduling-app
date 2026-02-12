@@ -2,29 +2,34 @@ import { NavLink, Route, Routes } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
 
 type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavailable';
+type UserRole = 'member' | 'admin';
 
 type UserProfile = {
   id: string;
   name: string;
-  isHost: boolean;
+  role: UserRole;
 };
 
 type AvailabilityByUser = Record<string, Record<string, AvailabilityStatus>>;
 
 type PersistedState = {
-  activeUserId: string;
+  users: UserProfile[];
+  hostUserId: string;
   availability: AvailabilityByUser;
 };
 
-const STORAGE_KEY = 'dnd_scheduler_state_v1';
-const STATUS_CYCLE: AvailabilityStatus[] = ['unspecified', 'available', 'maybe', 'unavailable'];
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const STORAGE_KEY = 'dnd_scheduler_state_v2';
+const SESSION_KEY = 'dnd_scheduler_session_v1';
 
-const usersSeed: UserProfile[] = [
-  { id: 'u1', name: 'Avery (Host)', isHost: true },
-  { id: 'u2', name: 'Morgan', isHost: false },
-  { id: 'u3', name: 'Riley', isHost: false },
-  { id: 'u4', name: 'Jordan', isHost: false }
+const MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
+const ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const PAINT_OPTIONS: Array<{ status: AvailabilityStatus; label: string }> = [
+  { status: 'available', label: 'Available' },
+  { status: 'maybe', label: 'Maybe' },
+  { status: 'unavailable', label: 'Unavailable' },
+  { status: 'unspecified', label: 'Clear' }
 ];
 
 function padTwo(value: number): string {
@@ -35,28 +40,46 @@ function toDateKey(date: Date): string {
   return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}-${padTwo(date.getDate())}`;
 }
 
-function getCurrentMonthDates(reference = new Date()): Date[] {
-  const year = reference.getFullYear();
-  const month = reference.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+function toMonthValue(date: Date): string {
+  return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}`;
+}
+
+function isValidMonthValue(value: string): boolean {
+  return /^\d{4}-\d{2}$/.test(value);
+}
+
+function getMonthDates(monthValue: string): Date[] {
+  if (!isValidMonthValue(monthValue)) {
+    return getMonthDates(toMonthValue(new Date()));
+  }
+
+  const [yearPart, monthPart] = monthValue.split('-');
+  const year = Number(yearPart);
+  const month = Number(monthPart);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    return getMonthDates(toMonthValue(new Date()));
+  }
+
+  const daysInMonth = new Date(year, month, 0).getDate();
   const dates: Date[] = [];
 
   for (let day = 1; day <= daysInMonth; day += 1) {
-    dates.push(new Date(year, month, day));
+    dates.push(new Date(year, month - 1, day));
   }
 
   return dates;
 }
 
-function getMonthLabel(dates: Date[]): string {
-  if (dates.length === 0) {
+function getMonthLabel(monthDates: Date[]): string {
+  if (monthDates.length === 0) {
     return '';
   }
 
   return new Intl.DateTimeFormat('en-US', {
     month: 'long',
     year: 'numeric'
-  }).format(dates[0]);
+  }).format(monthDates[0]);
 }
 
 function formatDateKey(dateKey: string): string {
@@ -83,6 +106,43 @@ function isAvailabilityStatus(value: unknown): value is AvailabilityStatus {
   );
 }
 
+function isUserRole(value: unknown): value is UserRole {
+  return value === 'member' || value === 'admin';
+}
+
+function sanitizeUsers(raw: unknown): UserProfile[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const cleanUsers: UserProfile[] = [];
+
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') {
+      continue;
+    }
+
+    const candidate = value as Partial<UserProfile>;
+    if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !isUserRole(candidate.role)) {
+      continue;
+    }
+
+    if (seen.has(candidate.id)) {
+      continue;
+    }
+
+    seen.add(candidate.id);
+    cleanUsers.push({
+      id: candidate.id,
+      name: candidate.name,
+      role: candidate.role
+    });
+  }
+
+  return cleanUsers;
+}
+
 function sanitizeAvailability(raw: unknown): AvailabilityByUser {
   if (!raw || typeof raw !== 'object') {
     return {};
@@ -95,23 +155,38 @@ function sanitizeAvailability(raw: unknown): AvailabilityByUser {
       continue;
     }
 
-    const cleanUserDays: Record<string, AvailabilityStatus> = {};
-
+    const cleanDays: Record<string, AvailabilityStatus> = {};
     for (const [dateKey, statusValue] of Object.entries(userValue as Record<string, unknown>)) {
       if (isAvailabilityStatus(statusValue)) {
-        cleanUserDays[dateKey] = statusValue;
+        cleanDays[dateKey] = statusValue;
       }
     }
 
-    clean[userId] = cleanUserDays;
+    clean[userId] = cleanDays;
   }
 
   return clean;
 }
 
-function loadInitialState(users: UserProfile[]): PersistedState {
+function normalizeName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ');
+}
+
+function createUserId(name: string): string {
+  const slug =
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 24) || 'user';
+  return `${slug}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function loadInitialState(): PersistedState {
   const fallback: PersistedState = {
-    activeUserId: users[0]?.id ?? '',
+    users: [],
+    hostUserId: '',
     availability: {}
   };
 
@@ -122,13 +197,16 @@ function loadInitialState(users: UserProfile[]): PersistedState {
     }
 
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
-    const activeUserId =
-      typeof parsed.activeUserId === 'string' && users.some((user) => user.id === parsed.activeUserId)
-        ? parsed.activeUserId
-        : fallback.activeUserId;
+    const users = sanitizeUsers(parsed.users);
+    const validUserIds = new Set(users.map((user) => user.id));
+    const hostUserId =
+      typeof parsed.hostUserId === 'string' && validUserIds.has(parsed.hostUserId)
+        ? parsed.hostUserId
+        : users[0]?.id ?? '';
 
     return {
-      activeUserId,
+      users,
+      hostUserId,
       availability: sanitizeAvailability(parsed.availability)
     };
   } catch {
@@ -136,10 +214,13 @@ function loadInitialState(users: UserProfile[]): PersistedState {
   }
 }
 
-function getNextStatus(current: AvailabilityStatus): AvailabilityStatus {
-  const currentIndex = STATUS_CYCLE.indexOf(current);
-  const nextIndex = (currentIndex + 1) % STATUS_CYCLE.length;
-  return STATUS_CYCLE[nextIndex];
+function loadInitialSessionUserId(): string {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return typeof raw === 'string' ? raw : '';
+  } catch {
+    return '';
+  }
 }
 
 function getStatusLabel(status: AvailabilityStatus): string {
@@ -158,68 +239,123 @@ function getStatusLabel(status: AvailabilityStatus): string {
   return 'Unspecified';
 }
 
-function PersonalAvailabilityPage({
-  users,
-  activeUserId,
-  setActiveUserId,
-  monthDates,
-  getStatus,
-  onToggleDate
+function SignInPage({
+  onSignIn,
+  error
 }: {
-  users: UserProfile[];
-  activeUserId: string;
-  setActiveUserId: (value: string) => void;
+  onSignIn: (username: string, inviteCode: string) => void;
+  error: string;
+}) {
+  const [username, setUsername] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+
+  return (
+    <section className="page-card sign-in-card">
+      <h2>Join Scheduler</h2>
+      <p>Enter your invite code and username to access the calendar.</p>
+
+      <form
+        className="sign-in-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSignIn(username, inviteCode);
+        }}
+      >
+        <label htmlFor="username-input">
+          Username
+          <input
+            id="username-input"
+            type="text"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="off"
+            maxLength={32}
+            required
+          />
+        </label>
+
+        <label htmlFor="invite-code-input">
+          Invite Code
+          <input
+            id="invite-code-input"
+            type="password"
+            value={inviteCode}
+            onChange={(event) => setInviteCode(event.target.value)}
+            autoComplete="off"
+            required
+          />
+        </label>
+
+        {error ? <p className="form-error">{error}</p> : null}
+
+        <button type="submit" className="primary-button">
+          Enter
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function PersonalAvailabilityPage({
+  currentUser,
+  monthDates,
+  monthValue,
+  setMonthValue,
+  paintStatus,
+  setPaintStatus,
+  getStatus,
+  onStartPaint,
+  onPaintWhileDragging,
+  onPaintDate
+}: {
+  currentUser: UserProfile;
   monthDates: Date[];
+  monthValue: string;
+  setMonthValue: (value: string) => void;
+  paintStatus: AvailabilityStatus;
+  setPaintStatus: (status: AvailabilityStatus) => void;
   getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
-  onToggleDate: (dateKey: string) => void;
+  onStartPaint: (dateKey: string) => void;
+  onPaintWhileDragging: (dateKey: string) => void;
+  onPaintDate: (dateKey: string) => void;
 }) {
   const monthLabel = getMonthLabel(monthDates);
-  const activeUser = users.find((user) => user.id === activeUserId) ?? users[0];
-  const leadingEmptyCells = monthDates.length > 0 ? (monthDates[0].getDay() + 6) % 7 : 0;
-
-  const gridCells: Array<Date | null> = [
-    ...Array.from({ length: leadingEmptyCells }, () => null),
-    ...monthDates
-  ];
-
+  const leadingEmptyCells = monthDates.length > 0 ? monthDates[0].getDay() : 0;
+  const gridCells: Array<Date | null> = [...Array.from({ length: leadingEmptyCells }, () => null), ...monthDates];
   const trailingEmptyCells = (7 - (gridCells.length % 7)) % 7;
   gridCells.push(...Array.from({ length: trailingEmptyCells }, () => null));
 
   return (
     <section className="page-card">
       <h2>My Availability</h2>
-      <p>Pick your profile, then click each day to cycle status.</p>
+      <p>You can only edit your own schedule. Choose a paint mode, then click and drag across days.</p>
 
-      <label className="profile-picker" htmlFor="profile-select">
-        Active Profile
-        <select
-          id="profile-select"
-          value={activeUserId}
-          onChange={(event) => setActiveUserId(event.target.value)}
-        >
-          {users.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="month-row">
+        <h3 className="month-heading">{monthLabel}</h3>
+        <label className="month-picker" htmlFor="month-picker">
+          Month
+          <input
+            id="month-picker"
+            type="month"
+            value={monthValue}
+            onChange={(event) => setMonthValue(event.target.value)}
+          />
+        </label>
+      </div>
 
-      <h3 className="month-heading">{monthLabel}</h3>
-
-      <div className="legend" aria-label="Availability legend">
-        <span className="legend-item">
-          <i className="chip chip-unspecified" /> Unspecified
-        </span>
-        <span className="legend-item">
-          <i className="chip chip-available" /> Available
-        </span>
-        <span className="legend-item">
-          <i className="chip chip-maybe" /> Maybe
-        </span>
-        <span className="legend-item">
-          <i className="chip chip-unavailable" /> Unavailable
-        </span>
+      <div className="paint-toolbar" role="toolbar" aria-label="Paint status">
+        {PAINT_OPTIONS.map((option) => (
+          <button
+            key={option.status}
+            type="button"
+            className={`paint-button paint-${option.status} ${
+              paintStatus === option.status ? 'paint-selected' : ''
+            }`}
+            onClick={() => setPaintStatus(option.status)}
+          >
+            {option.label}
+          </button>
+        ))}
       </div>
 
       <div className="calendar-grid" role="grid" aria-label={`${monthLabel} availability calendar`}>
@@ -235,7 +371,7 @@ function PersonalAvailabilityPage({
           }
 
           const dateKey = toDateKey(date);
-          const status = getStatus(activeUser.id, dateKey);
+          const status = getStatus(currentUser.id, dateKey);
 
           return (
             <button
@@ -243,7 +379,10 @@ function PersonalAvailabilityPage({
               type="button"
               className={`day-cell day-${status}`}
               role="gridcell"
-              onClick={() => onToggleDate(dateKey)}
+              onMouseDown={() => onStartPaint(dateKey)}
+              onMouseEnter={() => onPaintWhileDragging(dateKey)}
+              onClick={() => onPaintDate(dateKey)}
+              onDragStart={(event) => event.preventDefault()}
               aria-label={`${formatDateKey(dateKey)}: ${getStatusLabel(status)}`}
             >
               <span className="day-number">{date.getDate()}</span>
@@ -258,30 +397,31 @@ function PersonalAvailabilityPage({
 
 function HostSummaryPage({
   users,
-  activeUserId,
+  currentUser,
+  hostUserId,
   monthDateKeys,
   getStatus
 }: {
   users: UserProfile[];
-  activeUserId: string;
+  currentUser: UserProfile;
+  hostUserId: string;
   monthDateKeys: string[];
   getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
 }) {
-  const activeUser = users.find((user) => user.id === activeUserId) ?? users[0];
+  const canView = currentUser.role === 'admin' || currentUser.id === hostUserId;
 
-  if (!activeUser?.isHost) {
+  if (!canView) {
     return (
       <section className="page-card">
         <h2>Host Summary</h2>
-        <p>This page is host-only. Switch to the host profile to view group-wide availability.</p>
+        <p>This page is available only to the selected host and admin.</p>
       </section>
     );
   }
 
-  const allGreenDates = monthDateKeys.filter((dateKey) =>
-    users.every((user) => getStatus(user.id, dateKey) === 'available')
+  const allGreenDates = monthDateKeys.filter(
+    (dateKey) => users.length > 0 && users.every((user) => getStatus(user.id, dateKey) === 'available')
   );
-
   const anyRedDates = monthDateKeys.filter((dateKey) =>
     users.some((user) => getStatus(user.id, dateKey) === 'unavailable')
   );
@@ -289,12 +429,12 @@ function HostSummaryPage({
   return (
     <section className="page-card">
       <h2>Host Summary</h2>
-      <p>Dates below are based on current-month availability for all group members.</p>
+      <p>Month view for all signed-in users.</p>
 
       <div className="kpi-grid">
         <article>
           <h3>{users.length}</h3>
-          <p>Total Group Members</p>
+          <p>Total Signed-In Users</p>
         </article>
         <article>
           <h3>{allGreenDates.length}</h3>
@@ -307,7 +447,7 @@ function HostSummaryPage({
       </div>
 
       <section className="summary-block">
-        <h3>Best Candidate Dates (Everyone Green)</h3>
+        <h3>Best Candidate Dates</h3>
         {allGreenDates.length === 0 ? (
           <p className="empty-note">No dates are fully green yet.</p>
         ) : (
@@ -355,67 +495,236 @@ function HostSummaryPage({
   );
 }
 
+function AdminManagementPage({
+  currentUser,
+  users,
+  hostUserId,
+  setHostUserId
+}: {
+  currentUser: UserProfile;
+  users: UserProfile[];
+  hostUserId: string;
+  setHostUserId: (userId: string) => void;
+}) {
+  if (currentUser.role !== 'admin') {
+    return (
+      <section className="page-card">
+        <h2>Admin Management</h2>
+        <p>Only admin can access this page.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="page-card">
+      <h2>Admin Management</h2>
+      <p>Signed-in users and host assignment.</p>
+
+      <div className="admin-list">
+        {users.length === 0 ? (
+          <p className="empty-note">No users have signed in yet.</p>
+        ) : (
+          users.map((user) => (
+            <label key={user.id} className="admin-row">
+              <span>
+                <strong>{user.name}</strong>
+                <small>{user.role === 'admin' ? 'Admin' : 'Member'}</small>
+              </span>
+              <input
+                type="radio"
+                name="host-user"
+                checked={hostUserId === user.id}
+                onChange={() => setHostUserId(user.id)}
+              />
+            </label>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
-  const users = usersSeed;
-  const monthDates = useMemo(() => getCurrentMonthDates(new Date()), []);
+  const [state, setState] = useState<PersistedState>(() => loadInitialState());
+  const [sessionUserId, setSessionUserId] = useState<string>(() => loadInitialSessionUserId());
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => toMonthValue(new Date()));
+  const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
+  const [isPainting, setIsPainting] = useState(false);
+  const [signInError, setSignInError] = useState('');
+
+  const currentUser = state.users.find((user) => user.id === sessionUserId) ?? null;
+  const hostUser = state.users.find((user) => user.id === state.hostUserId) ?? null;
+  const monthDates = useMemo(() => getMonthDates(selectedMonth), [selectedMonth]);
   const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
-
-  const [state, setState] = useState<PersistedState>(() => loadInitialState(users));
-
-  const activeUserId = users.some((user) => user.id === state.activeUserId)
-    ? state.activeUserId
-    : users[0]?.id ?? '';
 
   useEffect(() => {
     try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          activeUserId,
-          availability: state.availability
-        })
-      );
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {
-      // Ignore localStorage write errors to keep UI functional.
+      // Keep UI functional if localStorage is unavailable.
     }
-  }, [activeUserId, state.availability]);
+  }, [state]);
+
+  useEffect(() => {
+    try {
+      if (sessionUserId) {
+        localStorage.setItem(SESSION_KEY, sessionUserId);
+      } else {
+        localStorage.removeItem(SESSION_KEY);
+      }
+    } catch {
+      // Keep UI functional if localStorage is unavailable.
+    }
+  }, [sessionUserId]);
+
+  useEffect(() => {
+    const onMouseUp = () => setIsPainting(false);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => window.removeEventListener('mouseup', onMouseUp);
+  }, []);
+
+  useEffect(() => {
+    if (sessionUserId && !state.users.some((user) => user.id === sessionUserId)) {
+      setSessionUserId('');
+    }
+  }, [sessionUserId, state.users]);
 
   const getStatus = (userId: string, dateKey: string): AvailabilityStatus => {
     return state.availability[userId]?.[dateKey] ?? 'unspecified';
   };
 
-  const setActiveUserId = (nextUserId: string): void => {
-    setState((current) => ({ ...current, activeUserId: nextUserId }));
-  };
-
-  const onToggleDate = (dateKey: string): void => {
-    if (!activeUserId) {
+  const paintDate = (dateKey: string): void => {
+    if (!currentUser) {
       return;
     }
 
     setState((current) => {
-      const userDays = current.availability[activeUserId] ?? {};
-      const currentStatus = userDays[dateKey] ?? 'unspecified';
-      const nextStatus = getNextStatus(currentStatus);
+      const userDays = current.availability[currentUser.id] ?? {};
+      if (userDays[dateKey] === selectedPaintStatus) {
+        return current;
+      }
 
       return {
         ...current,
         availability: {
           ...current.availability,
-          [activeUserId]: {
+          [currentUser.id]: {
             ...userDays,
-            [dateKey]: nextStatus
+            [dateKey]: selectedPaintStatus
           }
         }
       };
     });
   };
 
+  const onStartPaint = (dateKey: string): void => {
+    setIsPainting(true);
+    paintDate(dateKey);
+  };
+
+  const onPaintWhileDragging = (dateKey: string): void => {
+    if (!isPainting) {
+      return;
+    }
+
+    paintDate(dateKey);
+  };
+
+  const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
+    const username = normalizeName(usernameInput);
+    const inviteCode = inviteCodeInput.trim();
+
+    if (!username) {
+      setSignInError('Username is required.');
+      return;
+    }
+
+    let role: UserRole | null = null;
+    if (inviteCode === ADMIN_INVITE_CODE) {
+      role = 'admin';
+    } else if (inviteCode === MEMBER_INVITE_CODE) {
+      role = 'member';
+    }
+
+    if (!role) {
+      setSignInError('Invalid invite code.');
+      return;
+    }
+
+    const existingUser = state.users.find((user) => user.name.toLowerCase() === username.toLowerCase());
+    if (existingUser && existingUser.role !== role) {
+      setSignInError('That username already exists with a different invite type.');
+      return;
+    }
+
+    if (existingUser) {
+      setSessionUserId(existingUser.id);
+      setSignInError('');
+      return;
+    }
+
+    const newUser: UserProfile = {
+      id: createUserId(username),
+      name: username,
+      role
+    };
+
+    setState((current) => ({
+      ...current,
+      users: [...current.users, newUser],
+      hostUserId: current.hostUserId || newUser.id
+    }));
+    setSessionUserId(newUser.id);
+    setSignInError('');
+  };
+
+  const onSetHostUserId = (userId: string): void => {
+    setState((current) => {
+      if (!current.users.some((user) => user.id === userId)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        hostUserId: userId
+      };
+    });
+  };
+
+  const onSignOut = (): void => {
+    setSessionUserId('');
+    setSignInError('');
+  };
+
+  const onChangeMonth = (nextValue: string): void => {
+    setSelectedMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
+  };
+
+  if (!currentUser) {
+    return (
+      <div className="app-shell">
+        <header className="app-header">
+          <h1>DnD Group Scheduler</h1>
+          <p>Invite-only scheduling board for your party.</p>
+        </header>
+        <main>
+          <SignInPage onSignIn={onSignIn} error={signInError} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1>DnD Group Scheduler</h1>
-        <p>Paint availability by day, then let the host find fully green dates.</p>
+        <p>
+          Signed in as <strong>{currentUser.name}</strong> ({currentUser.role}). Host:{' '}
+          <strong>{hostUser?.name ?? 'Not set'}</strong>
+        </p>
+        <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
+          Sign Out
+        </button>
       </header>
 
       <nav className="top-nav" aria-label="Primary">
@@ -423,6 +732,7 @@ export default function App() {
           My Availability
         </NavLink>
         <NavLink to="/host">Host Summary</NavLink>
+        {currentUser.role === 'admin' ? <NavLink to="/admin">Admin Management</NavLink> : null}
       </nav>
 
       <main>
@@ -431,12 +741,16 @@ export default function App() {
             path="/"
             element={
               <PersonalAvailabilityPage
-                users={users}
-                activeUserId={activeUserId}
-                setActiveUserId={setActiveUserId}
+                currentUser={currentUser}
                 monthDates={monthDates}
+                monthValue={selectedMonth}
+                setMonthValue={onChangeMonth}
+                paintStatus={selectedPaintStatus}
+                setPaintStatus={setSelectedPaintStatus}
                 getStatus={getStatus}
-                onToggleDate={onToggleDate}
+                onStartPaint={onStartPaint}
+                onPaintWhileDragging={onPaintWhileDragging}
+                onPaintDate={paintDate}
               />
             }
           />
@@ -444,10 +758,39 @@ export default function App() {
             path="/host"
             element={
               <HostSummaryPage
-                users={users}
-                activeUserId={activeUserId}
+                users={state.users}
+                currentUser={currentUser}
+                hostUserId={state.hostUserId}
                 monthDateKeys={monthDateKeys}
                 getStatus={getStatus}
+              />
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AdminManagementPage
+                currentUser={currentUser}
+                users={state.users}
+                hostUserId={state.hostUserId}
+                setHostUserId={onSetHostUserId}
+              />
+            }
+          />
+          <Route
+            path="*"
+            element={
+              <PersonalAvailabilityPage
+                currentUser={currentUser}
+                monthDates={monthDates}
+                monthValue={selectedMonth}
+                setMonthValue={onChangeMonth}
+                paintStatus={selectedPaintStatus}
+                setPaintStatus={setSelectedPaintStatus}
+                getStatus={getStatus}
+                onStartPaint={onStartPaint}
+                onPaintWhileDragging={onPaintWhileDragging}
+                onPaintDate={paintDate}
               />
             }
           />
