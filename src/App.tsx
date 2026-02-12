@@ -1,5 +1,8 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
+import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
+import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db, firebaseConfigError } from './firebase';
 
 type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavailable';
 type UserRole = 'member' | 'admin';
@@ -18,11 +21,9 @@ type PersistedState = {
   availability: AvailabilityByUser;
 };
 
-const STORAGE_KEY = 'dnd_scheduler_state_v2';
-const SESSION_KEY = 'dnd_scheduler_session_v1';
-
 const MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
 const ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
+const APP_NAMESPACE = import.meta.env.VITE_FIREBASE_APP_NAMESPACE ?? 'default';
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const PAINT_OPTIONS: Array<{ status: AvailabilityStatus; label: string }> = [
@@ -30,6 +31,20 @@ const PAINT_OPTIONS: Array<{ status: AvailabilityStatus; label: string }> = [
   { status: 'maybe', label: 'Maybe' },
   { status: 'unavailable', label: 'Unavailable' },
   { status: 'unspecified', label: 'Clear' }
+];
+const MONTH_NAME_OPTIONS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December'
 ];
 
 function padTwo(value: number): string {
@@ -48,18 +63,25 @@ function isValidMonthValue(value: string): boolean {
   return /^\d{4}-\d{2}$/.test(value);
 }
 
-function getMonthDates(monthValue: string): Date[] {
-  if (!isValidMonthValue(monthValue)) {
-    return getMonthDates(toMonthValue(new Date()));
+function parseMonthValue(value: string): { year: number; month: number } {
+  if (!isValidMonthValue(value)) {
+    const today = new Date();
+    return { year: today.getFullYear(), month: today.getMonth() + 1 };
   }
 
-  const [yearPart, monthPart] = monthValue.split('-');
+  const [yearPart, monthPart] = value.split('-');
   const year = Number(yearPart);
   const month = Number(monthPart);
-
   if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
-    return getMonthDates(toMonthValue(new Date()));
+    const today = new Date();
+    return { year: today.getFullYear(), month: today.getMonth() + 1 };
   }
+
+  return { year, month };
+}
+
+function getMonthDates(monthValue: string): Date[] {
+  const { year, month } = parseMonthValue(monthValue);
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const dates: Date[] = [];
@@ -110,117 +132,8 @@ function isUserRole(value: unknown): value is UserRole {
   return value === 'member' || value === 'admin';
 }
 
-function sanitizeUsers(raw: unknown): UserProfile[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const cleanUsers: UserProfile[] = [];
-
-  for (const value of raw) {
-    if (!value || typeof value !== 'object') {
-      continue;
-    }
-
-    const candidate = value as Partial<UserProfile>;
-    if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !isUserRole(candidate.role)) {
-      continue;
-    }
-
-    if (seen.has(candidate.id)) {
-      continue;
-    }
-
-    seen.add(candidate.id);
-    cleanUsers.push({
-      id: candidate.id,
-      name: candidate.name,
-      role: candidate.role
-    });
-  }
-
-  return cleanUsers;
-}
-
-function sanitizeAvailability(raw: unknown): AvailabilityByUser {
-  if (!raw || typeof raw !== 'object') {
-    return {};
-  }
-
-  const clean: AvailabilityByUser = {};
-
-  for (const [userId, userValue] of Object.entries(raw as Record<string, unknown>)) {
-    if (!userValue || typeof userValue !== 'object') {
-      continue;
-    }
-
-    const cleanDays: Record<string, AvailabilityStatus> = {};
-    for (const [dateKey, statusValue] of Object.entries(userValue as Record<string, unknown>)) {
-      if (isAvailabilityStatus(statusValue)) {
-        cleanDays[dateKey] = statusValue;
-      }
-    }
-
-    clean[userId] = cleanDays;
-  }
-
-  return clean;
-}
-
 function normalizeName(name: string): string {
   return name.trim().replace(/\s+/g, ' ');
-}
-
-function createUserId(name: string): string {
-  const slug =
-    name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 24) || 'user';
-  return `${slug}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function loadInitialState(): PersistedState {
-  const fallback: PersistedState = {
-    users: [],
-    hostUserId: '',
-    availability: {}
-  };
-
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return fallback;
-    }
-
-    const parsed = JSON.parse(raw) as Partial<PersistedState>;
-    const users = sanitizeUsers(parsed.users);
-    const validUserIds = new Set(users.map((user) => user.id));
-    const hostUserId =
-      typeof parsed.hostUserId === 'string' && validUserIds.has(parsed.hostUserId)
-        ? parsed.hostUserId
-        : users[0]?.id ?? '';
-
-    return {
-      users,
-      hostUserId,
-      availability: sanitizeAvailability(parsed.availability)
-    };
-  } catch {
-    return fallback;
-  }
-}
-
-function loadInitialSessionUserId(): string {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    return typeof raw === 'string' ? raw : '';
-  } catch {
-    return '';
-  }
 }
 
 function getStatusLabel(status: AvailabilityStatus): string {
@@ -237,6 +150,29 @@ function getStatusLabel(status: AvailabilityStatus): string {
   }
 
   return 'Unspecified';
+}
+
+function getAppDocumentRef() {
+  if (!db) {
+    return null;
+  }
+
+  return doc(db, 'apps', APP_NAMESPACE);
+}
+
+function getUsersCollectionRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? collection(appRef, 'users') : null;
+}
+
+function getAvailabilityCollectionRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? collection(appRef, 'availability') : null;
+}
+
+function getSettingsDocumentRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? doc(appRef, 'meta', 'settings') : null;
 }
 
 function SignInPage({
@@ -320,6 +256,8 @@ function PersonalAvailabilityPage({
   onPaintDate: (dateKey: string) => void;
 }) {
   const monthLabel = getMonthLabel(monthDates);
+  const selectedMonthParts = parseMonthValue(monthValue);
+  const yearOptions = Array.from({ length: 11 }, (_, index) => selectedMonthParts.year - 5 + index);
   const leadingEmptyCells = monthDates.length > 0 ? monthDates[0].getDay() : 0;
   const gridCells: Array<Date | null> = [...Array.from({ length: leadingEmptyCells }, () => null), ...monthDates];
   const trailingEmptyCells = (7 - (gridCells.length % 7)) % 7;
@@ -332,15 +270,41 @@ function PersonalAvailabilityPage({
 
       <div className="month-row">
         <h3 className="month-heading">{monthLabel}</h3>
-        <label className="month-picker" htmlFor="month-picker">
-          Month
-          <input
-            id="month-picker"
-            type="month"
-            value={monthValue}
-            onChange={(event) => setMonthValue(event.target.value)}
-          />
-        </label>
+        <div className="month-picker-group" aria-label="Month picker">
+          <label className="month-picker" htmlFor="month-name-select">
+            Month
+            <select
+              id="month-name-select"
+              value={String(selectedMonthParts.month)}
+              onChange={(event) =>
+                setMonthValue(`${selectedMonthParts.year}-${padTwo(Number(event.target.value))}`)
+              }
+            >
+              {MONTH_NAME_OPTIONS.map((label, index) => (
+                <option key={label} value={String(index + 1)}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="month-picker" htmlFor="month-year-select">
+            Year
+            <select
+              id="month-year-select"
+              value={String(selectedMonthParts.year)}
+              onChange={(event) =>
+                setMonthValue(`${event.target.value}-${padTwo(selectedMonthParts.month)}`)
+              }
+            >
+              {yearOptions.map((year) => (
+                <option key={year} value={String(year)}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       <div className="paint-toolbar" role="toolbar" aria-label="Paint status">
@@ -545,8 +509,15 @@ function AdminManagementPage({
 }
 
 export default function App() {
-  const [state, setState] = useState<PersistedState>(() => loadInitialState());
-  const [sessionUserId, setSessionUserId] = useState<string>(() => loadInitialSessionUserId());
+  const [state, setState] = useState<PersistedState>({
+    users: [],
+    hostUserId: '',
+    availability: {}
+  });
+  const [authUserId, setAuthUserId] = useState('');
+  const [sessionUserId, setSessionUserId] = useState('');
+  const [authReady, setAuthReady] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toMonthValue(new Date()));
   const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
   const [isPainting, setIsPainting] = useState(false);
@@ -554,28 +525,176 @@ export default function App() {
 
   const currentUser = state.users.find((user) => user.id === sessionUserId) ?? null;
   const hostUser = state.users.find((user) => user.id === state.hostUserId) ?? null;
+  const canViewHostSummary =
+    currentUser !== null && (currentUser.role === 'admin' || currentUser.id === state.hostUserId);
   const monthDates = useMemo(() => getMonthDates(selectedMonth), [selectedMonth]);
   const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Keep UI functional if localStorage is unavailable.
+    if (!auth) {
+      setAuthReady(true);
+      return;
     }
-  }, [state]);
+
+    const authInstance = auth;
+    const unsubscribe = onAuthStateChanged(authInstance, (user) => {
+      if (user) {
+        setAuthUserId(user.uid);
+        setAuthReady(true);
+        return;
+      }
+
+      signInAnonymously(authInstance)
+        .then((credential) => {
+          setAuthUserId(credential.user.uid);
+          setAuthReady(true);
+        })
+        .catch(() => {
+          setSignInError('Unable to initialize sign-in. Check Firebase configuration.');
+          setAuthReady(true);
+        });
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
-    try {
-      if (sessionUserId) {
-        localStorage.setItem(SESSION_KEY, sessionUserId);
-      } else {
-        localStorage.removeItem(SESSION_KEY);
+    if (!db || !authReady) {
+      if (!db) {
+        setDataReady(true);
       }
-    } catch {
-      // Keep UI functional if localStorage is unavailable.
+
+      return;
     }
-  }, [sessionUserId]);
+
+    const usersRef = getUsersCollectionRef();
+    const availabilityRef = getAvailabilityCollectionRef();
+    const settingsRef = getSettingsDocumentRef();
+
+    if (!usersRef || !availabilityRef || !settingsRef) {
+      setDataReady(true);
+      return;
+    }
+
+    setDataReady(false);
+
+    let usersLoaded = false;
+    let availabilityLoaded = false;
+    let settingsLoaded = false;
+
+    const maybeMarkReady = (): void => {
+      if (usersLoaded && availabilityLoaded && settingsLoaded) {
+        setDataReady(true);
+      }
+    };
+
+    const unsubscribeUsers = onSnapshot(
+      usersRef,
+      (snapshot) => {
+        const users: UserProfile[] = [];
+
+        snapshot.forEach((docSnapshot) => {
+          const value = docSnapshot.data();
+          const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+          const role = value.role;
+
+          if (!name || !isUserRole(role)) {
+            return;
+          }
+
+          users.push({
+            id: docSnapshot.id,
+            name,
+            role
+          });
+        });
+
+        setState((current) => ({
+          ...current,
+          users: users.sort((a, b) => a.name.localeCompare(b.name))
+        }));
+        usersLoaded = true;
+        maybeMarkReady();
+      },
+      () => {
+        usersLoaded = true;
+        maybeMarkReady();
+      }
+    );
+
+    const unsubscribeAvailability = onSnapshot(
+      availabilityRef,
+      (snapshot) => {
+        const availability: AvailabilityByUser = {};
+
+        snapshot.forEach((docSnapshot) => {
+          const raw = docSnapshot.data();
+          const daysRaw = raw.days;
+
+          if (!daysRaw || typeof daysRaw !== 'object') {
+            availability[docSnapshot.id] = {};
+            return;
+          }
+
+          const days: Record<string, AvailabilityStatus> = {};
+          for (const [dateKey, statusValue] of Object.entries(daysRaw as Record<string, unknown>)) {
+            if (isAvailabilityStatus(statusValue)) {
+              days[dateKey] = statusValue;
+            }
+          }
+
+          availability[docSnapshot.id] = days;
+        });
+
+        setState((current) => ({
+          ...current,
+          availability
+        }));
+        availabilityLoaded = true;
+        maybeMarkReady();
+      },
+      () => {
+        availabilityLoaded = true;
+        maybeMarkReady();
+      }
+    );
+
+    const unsubscribeSettings = onSnapshot(
+      settingsRef,
+      (docSnapshot) => {
+        const value = docSnapshot.data();
+        const hostUserId = typeof value?.hostUserId === 'string' ? value.hostUserId : '';
+
+        setState((current) => ({
+          ...current,
+          hostUserId
+        }));
+        settingsLoaded = true;
+        maybeMarkReady();
+      },
+      () => {
+        settingsLoaded = true;
+        maybeMarkReady();
+      }
+    );
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeAvailability();
+      unsubscribeSettings();
+    };
+  }, [authReady]);
+
+  useEffect(() => {
+    if (!authUserId) {
+      setSessionUserId('');
+      return;
+    }
+
+    if (state.users.some((user) => user.id === authUserId)) {
+      setSessionUserId(authUserId);
+    }
+  }, [authUserId, state.users]);
 
   useEffect(() => {
     const onMouseUp = () => setIsPainting(false);
@@ -584,10 +703,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (sessionUserId && !state.users.some((user) => user.id === sessionUserId)) {
-      setSessionUserId('');
+    const settingsRef = getSettingsDocumentRef();
+    if (!settingsRef || state.users.length === 0 || state.hostUserId) {
+      return;
     }
-  }, [sessionUserId, state.users]);
+
+    void setDoc(settingsRef, { hostUserId: state.users[0].id, updatedAt: serverTimestamp() }, { merge: true });
+  }, [state.users, state.hostUserId]);
 
   const getStatus = (userId: string, dateKey: string): AvailabilityStatus => {
     return state.availability[userId]?.[dateKey] ?? 'unspecified';
@@ -598,22 +720,46 @@ export default function App() {
       return;
     }
 
+    const availabilityRef = getAvailabilityCollectionRef();
+    if (!availabilityRef) {
+      return;
+    }
+
+    let nextDays: Record<string, AvailabilityStatus> | null = null;
+
     setState((current) => {
       const userDays = current.availability[currentUser.id] ?? {};
       if (userDays[dateKey] === selectedPaintStatus) {
         return current;
       }
 
+      nextDays = {
+        ...userDays,
+        [dateKey]: selectedPaintStatus
+      };
+
       return {
         ...current,
         availability: {
           ...current.availability,
-          [currentUser.id]: {
-            ...userDays,
-            [dateKey]: selectedPaintStatus
-          }
+          [currentUser.id]: nextDays
         }
       };
+    });
+
+    if (!nextDays) {
+      return;
+    }
+
+    void setDoc(
+      doc(availabilityRef, currentUser.id),
+      {
+        days: nextDays,
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    ).catch(() => {
+      setSignInError('Unable to save availability update.');
     });
   };
 
@@ -639,66 +785,152 @@ export default function App() {
       return;
     }
 
-    let role: UserRole | null = null;
-    if (inviteCode === ADMIN_INVITE_CODE) {
-      role = 'admin';
-    } else if (inviteCode === MEMBER_INVITE_CODE) {
-      role = 'member';
+    if (!authUserId) {
+      setSignInError('Authentication is not ready yet.');
+      return;
     }
 
-    if (!role) {
+    const usersRef = getUsersCollectionRef();
+    const settingsRef = getSettingsDocumentRef();
+    if (!usersRef || !settingsRef) {
+      setSignInError('Firebase is not configured.');
+      return;
+    }
+
+    let inviteRole: UserRole | null = null;
+    if (inviteCode === ADMIN_INVITE_CODE) {
+      inviteRole = 'admin';
+    } else if (inviteCode === MEMBER_INVITE_CODE) {
+      inviteRole = 'member';
+    }
+
+    if (!inviteRole) {
       setSignInError('Invalid invite code.');
       return;
     }
 
-    const existingUser = state.users.find((user) => user.name.toLowerCase() === username.toLowerCase());
-    if (existingUser && existingUser.role !== role) {
-      setSignInError('That username already exists with a different invite type.');
-      return;
-    }
+    const userDocRef = doc(usersRef, authUserId);
 
-    if (existingUser) {
-      setSessionUserId(existingUser.id);
-      setSignInError('');
-      return;
-    }
+    void getDoc(userDocRef)
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const existingRole = snapshot.data().role;
+          if (!isUserRole(existingRole)) {
+            throw new Error('Profile role is invalid.');
+          }
 
-    const newUser: UserProfile = {
-      id: createUserId(username),
-      name: username,
-      role
-    };
+          if (existingRole !== inviteRole) {
+            throw new Error('This browser profile is already registered with a different invite type.');
+          }
 
-    setState((current) => ({
-      ...current,
-      users: [...current.users, newUser],
-      hostUserId: current.hostUserId || newUser.id
-    }));
-    setSessionUserId(newUser.id);
-    setSignInError('');
+          return setDoc(
+            userDocRef,
+            {
+              name: username,
+              role: existingRole,
+              lastSeenAt: serverTimestamp()
+            },
+            { merge: true }
+          );
+        }
+
+        return setDoc(
+          userDocRef,
+          {
+            name: username,
+            role: inviteRole,
+            createdAt: serverTimestamp(),
+            lastSeenAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+      })
+      .then(() => {
+        if (!state.hostUserId) {
+          return setDoc(settingsRef, { hostUserId: authUserId, updatedAt: serverTimestamp() }, { merge: true });
+        }
+
+        return Promise.resolve();
+      })
+      .then(() => {
+        setSessionUserId(authUserId);
+        setSignInError('');
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error) {
+          setSignInError(error.message);
+          return;
+        }
+
+        setSignInError('Unable to sign in at this time.');
+      });
   };
 
   const onSetHostUserId = (userId: string): void => {
-    setState((current) => {
-      if (!current.users.some((user) => user.id === userId)) {
-        return current;
-      }
+    if (!currentUser || currentUser.role !== 'admin') {
+      return;
+    }
 
-      return {
-        ...current,
-        hostUserId: userId
-      };
+    const settingsRef = getSettingsDocumentRef();
+    if (!settingsRef || !state.users.some((user) => user.id === userId)) {
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      hostUserId: userId
+    }));
+
+    void setDoc(settingsRef, { hostUserId: userId, updatedAt: serverTimestamp() }, { merge: true }).catch(() => {
+      setSignInError('Unable to update host assignment.');
     });
   };
 
   const onSignOut = (): void => {
     setSessionUserId('');
     setSignInError('');
+    setIsPainting(false);
+
+    if (!auth) {
+      return;
+    }
+
+    void signOut(auth).catch(() => {
+      setSignInError('Unable to sign out cleanly.');
+    });
   };
 
   const onChangeMonth = (nextValue: string): void => {
     setSelectedMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
   };
+
+  if (firebaseConfigError) {
+    return (
+      <div className="app-shell">
+        <header className="app-header">
+          <h1>DnD Group Scheduler</h1>
+          <p>Firebase setup is required for shared state.</p>
+        </header>
+        <main>
+          <section className="page-card sign-in-card">
+            <h2>Missing Firebase Config</h2>
+            <p>{firebaseConfigError}</p>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (!authReady || !dataReady) {
+    return (
+      <div className="app-shell">
+        <header className="app-header">
+          <h1>DnD Group Scheduler</h1>
+          <p>Connecting to shared schedule data...</p>
+        </header>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (
@@ -731,7 +963,7 @@ export default function App() {
         <NavLink to="/" end>
           My Availability
         </NavLink>
-        <NavLink to="/host">Host Summary</NavLink>
+        {canViewHostSummary ? <NavLink to="/host">Host Summary</NavLink> : null}
         {currentUser.role === 'admin' ? <NavLink to="/admin">Admin Management</NavLink> : null}
       </nav>
 
@@ -757,13 +989,28 @@ export default function App() {
           <Route
             path="/host"
             element={
-              <HostSummaryPage
-                users={state.users}
-                currentUser={currentUser}
-                hostUserId={state.hostUserId}
-                monthDateKeys={monthDateKeys}
-                getStatus={getStatus}
-              />
+              canViewHostSummary ? (
+                <HostSummaryPage
+                  users={state.users}
+                  currentUser={currentUser}
+                  hostUserId={state.hostUserId}
+                  monthDateKeys={monthDateKeys}
+                  getStatus={getStatus}
+                />
+              ) : (
+                <PersonalAvailabilityPage
+                  currentUser={currentUser}
+                  monthDates={monthDates}
+                  monthValue={selectedMonth}
+                  setMonthValue={onChangeMonth}
+                  paintStatus={selectedPaintStatus}
+                  setPaintStatus={setSelectedPaintStatus}
+                  getStatus={getStatus}
+                  onStartPaint={onStartPaint}
+                  onPaintWhileDragging={onPaintWhileDragging}
+                  onPaintDate={paintDate}
+                />
+              )
             }
           />
           <Route

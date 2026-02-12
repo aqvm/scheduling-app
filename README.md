@@ -1,6 +1,6 @@
 # Scheduling App
 
-Invite-only DnD scheduling app built with React + TypeScript + Vite.
+Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 
 ## Features
 
@@ -10,6 +10,73 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite.
 - Sunday-first month grid with month picker
 - Host summary view (host + admin access)
 - Admin-only management page to view signed-in users and assign host
+- Realtime shared state across browser profiles/devices via Firestore
+
+## Firebase Setup
+
+1. Create a Firebase project.
+2. In Firebase Console, enable `Authentication -> Sign-in method -> Anonymous`.
+3. Create a Firestore database in production mode.
+4. Copy `.env.example` to `.env.local` and fill in your Firebase values.
+5. In GitHub repo settings, add Actions secrets for Firebase (list below).
+
+Required env vars:
+
+```bash
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_APP_ID=
+```
+
+Optional env vars:
+
+```bash
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_NAMESPACE=default
+```
+
+Suggested Firestore security rules for this app:
+
+```txt
+Copy from `firestore.rules` in this repo.
+```
+
+GitHub Actions secrets expected by `.github/workflows/deploy.yml`:
+
+Required:
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+
+Optional:
+
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_APP_NAMESPACE` (defaults to `default`)
+- `VITE_MEMBER_INVITE_CODE` (defaults to `party-members`)
+- `VITE_ADMIN_INVITE_CODE` (defaults to `owner-admin`)
+
+## Firestore Rules Deploy (Optional CLI)
+
+If you want rules versioned/deployed from this repo:
+
+1. Install Firebase CLI:
+
+```bash
+npm i -g firebase-tools
+```
+
+2. Copy `.firebaserc.example` to `.firebaserc` and set your Firebase project ID.
+3. Login and deploy rules:
+
+```bash
+firebase login
+firebase deploy --only firestore:rules
+```
 
 ## Invite Code Setup
 

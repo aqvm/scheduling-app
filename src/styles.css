@@ -172,6 +172,12 @@ select {
   margin: 0;
 }
 
+.month-picker-group {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
 .month-picker {
   display: grid;
   gap: 0.35rem;
@@ -179,12 +185,13 @@ select {
   color: #bdd0e7;
 }
 
-.month-picker input {
+.month-picker select {
   border: 1px solid rgba(120, 144, 171, 0.52);
   border-radius: 0.55rem;
   padding: 0.42rem 0.56rem;
   background: rgba(9, 16, 26, 0.84);
   color: #ebf2fa;
+  min-width: 120px;
 }
 
 .paint-toolbar {
