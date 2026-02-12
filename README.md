@@ -1,14 +1,29 @@
-# Scheduling App POC
+# Scheduling App
 
-A lightweight proof-of-concept scheduling app built with React + TypeScript + Vite.
+Invite-only DnD scheduling app built with React + TypeScript + Vite.
 
-## What this POC includes
+## Features
 
-- Campaign selector with shared scheduling context
-- Dashboard KPIs for sessions and participation
-- Availability matrix by person and timeslot
-- Proposed session form with conflict checks
-- Hash-based routing for GitHub Pages compatibility
+- Invite-code sign-in with username (`member` and `admin` access)
+- Dark-mode calendar UI
+- Paint-style availability editing (click or click-drag)
+- Sunday-first month grid with month picker
+- Host summary view (host + admin access)
+- Admin-only management page to view signed-in users and assign host
+
+## Invite Code Setup
+
+Configure invite codes with Vite environment variables:
+
+```bash
+VITE_MEMBER_INVITE_CODE=your-member-code
+VITE_ADMIN_INVITE_CODE=your-admin-code
+```
+
+If not set, defaults are:
+
+- Member: `party-members`
+- Admin: `owner-admin`
 
 ## Run locally
 
@@ -32,7 +47,7 @@ npm run preview
 4. Push to `main` (or re-run the workflow in `Actions`).
 5. Your site will be published after the `Deploy to GitHub Pages` workflow completes.
 
-## Important repo-name note
+## Repo Name Note
 
 `vite.config.ts` currently uses:
 
