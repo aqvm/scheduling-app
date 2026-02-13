@@ -22,6 +22,15 @@ type PersistedState = {
 };
 type PendingEditsByUser = Record<string, Record<string, AvailabilityStatus>>;
 
+type DateScoreSummary = {
+  dateKey: string;
+  availableCount: number;
+  maybeCount: number;
+  unavailableCount: number;
+  unspecifiedCount: number;
+  score: number;
+};
+
 const MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
 const ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
 const APP_NAMESPACE = import.meta.env.VITE_FIREBASE_APP_NAMESPACE ?? 'default';
@@ -151,6 +160,22 @@ function getStatusLabel(status: AvailabilityStatus): string {
   }
 
   return 'Unspecified';
+}
+
+function getStatusScore(status: AvailabilityStatus): number {
+  if (status === 'available') {
+    return 2;
+  }
+
+  if (status === 'maybe') {
+    return 1;
+  }
+
+  if (status === 'unavailable') {
+    return -2;
+  }
+
+  return 0;
 }
 
 function getAppDocumentRef() {
@@ -408,6 +433,63 @@ function HostSummaryPage({
   const anyRedDates = monthDateKeys.filter((dateKey) =>
     users.some((user) => getStatus(user.id, dateKey) === 'unavailable')
   );
+  const rankedDateSummaries = useMemo(() => {
+    const dateSummaries: DateScoreSummary[] = monthDateKeys.map((dateKey) => {
+      let availableCount = 0;
+      let maybeCount = 0;
+      let unavailableCount = 0;
+      let unspecifiedCount = 0;
+      let score = 0;
+
+      users.forEach((user) => {
+        const status = getStatus(user.id, dateKey);
+        score += getStatusScore(status);
+
+        if (status === 'available') {
+          availableCount += 1;
+          return;
+        }
+
+        if (status === 'maybe') {
+          maybeCount += 1;
+          return;
+        }
+
+        if (status === 'unavailable') {
+          unavailableCount += 1;
+          return;
+        }
+
+        unspecifiedCount += 1;
+      });
+
+      return {
+        dateKey,
+        availableCount,
+        maybeCount,
+        unavailableCount,
+        unspecifiedCount,
+        score
+      };
+    });
+
+    return dateSummaries.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      if (left.unavailableCount !== right.unavailableCount) {
+        return left.unavailableCount - right.unavailableCount;
+      }
+
+      if (right.availableCount !== left.availableCount) {
+        return right.availableCount - left.availableCount;
+      }
+
+      return left.dateKey.localeCompare(right.dateKey);
+    });
+  }, [monthDateKeys, users, getStatus]);
+  const topCandidateDates = rankedDateSummaries.slice(0, 5);
 
   return (
     <section className="page-card">
@@ -430,14 +512,19 @@ function HostSummaryPage({
       </div>
 
       <section className="summary-block">
-        <h3>Best Candidate Dates</h3>
-        {allGreenDates.length === 0 ? (
-          <p className="empty-note">No dates are fully green yet.</p>
+        <h3>Top Candidate Dates</h3>
+        {topCandidateDates.length === 0 ? (
+          <p className="empty-note">No dates in this month yet.</p>
         ) : (
           <ul className="list-reset">
-            {allGreenDates.map((dateKey) => (
-              <li key={dateKey} className="summary-row">
-                {formatDateKey(dateKey)}
+            {topCandidateDates.map((dateSummary) => (
+              <li key={dateSummary.dateKey} className="summary-row">
+                <strong>{formatDateKey(dateSummary.dateKey)}</strong>
+                <span className="summary-score">Score: {dateSummary.score}</span>
+                <span>
+                  Available {dateSummary.availableCount} · Maybe {dateSummary.maybeCount} · Unavailable{' '}
+                  {dateSummary.unavailableCount}
+                </span>
               </li>
             ))}
           </ul>
@@ -451,19 +538,25 @@ function HostSummaryPage({
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Score</th>
                 {users.map((user) => (
                   <th key={user.id}>{user.name}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {monthDateKeys.map((dateKey) => (
-                <tr key={dateKey}>
-                  <td>{formatDateKey(dateKey)}</td>
+              {rankedDateSummaries.map((dateSummary) => (
+                <tr key={dateSummary.dateKey} className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
+                  <td>{formatDateKey(dateSummary.dateKey)}</td>
+                  <td>
+                    <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
+                      {dateSummary.score}
+                    </span>
+                  </td>
                   {users.map((user) => {
-                    const status = getStatus(user.id, dateKey);
+                    const status = getStatus(user.id, dateSummary.dateKey);
                     return (
-                      <td key={`${dateKey}-${user.id}`}>
+                      <td key={`${dateSummary.dateKey}-${user.id}`}>
                         <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
                       </td>
                     );

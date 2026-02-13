@@ -356,10 +356,17 @@ select {
 }
 
 .summary-row {
+  display: grid;
+  gap: 0.2rem;
   padding: 0.58rem 0.7rem;
   border: 1px solid rgba(111, 133, 158, 0.42);
   border-radius: 0.62rem;
   background: rgba(14, 22, 35, 0.84);
+}
+
+.summary-score {
+  color: #9ec7ff;
+  font-weight: 700;
 }
 
 .empty-note {
@@ -386,6 +393,38 @@ td {
 
 th {
   background: rgba(19, 35, 55, 0.88);
+}
+
+.score-row.score-positive {
+  background: rgba(17, 59, 40, 0.26);
+}
+
+.score-row.score-negative {
+  background: rgba(77, 28, 28, 0.26);
+}
+
+.score-pill {
+  display: inline-block;
+  min-width: 2.4rem;
+  text-align: center;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-weight: 700;
+}
+
+.score-pill-positive {
+  background: rgba(36, 121, 71, 0.82);
+  color: #e6fff2;
+}
+
+.score-pill-neutral {
+  background: rgba(75, 92, 112, 0.82);
+  color: #d3e0ef;
+}
+
+.score-pill-negative {
+  background: rgba(153, 54, 54, 0.86);
+  color: #ffe7e7;
 }
 
 .status-pill {
