@@ -1111,6 +1111,7 @@ export default function App() {
           <p>Firebase setup is required for shared state.</p>
         </header>
         <main>
+          {/* Keep a single <main> wrapper for the config error state. */}
           <section className="page-card sign-in-card">
             <h2>Missing Firebase Config</h2>
             <p>{firebaseConfigError}</p>
