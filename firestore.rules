@@ -18,21 +18,23 @@ service cloud.firestore {
     match /apps/{appNamespace}/users/{userId} {
       allow read: if signedIn();
 
-      // Client profile bootstrap. Role is restricted to member so admin elevation
-      // must happen through a server-controlled path.
       allow create: if signedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.keys().hasOnly(['name', 'role', 'createdAt', 'lastSeenAt']) &&
+        request.resource.data.keys().hasOnly(['name', 'email', 'role', 'createdAt', 'lastSeenAt']) &&
         request.resource.data.name is string &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() > 0 &&
         request.resource.data.lastSeenAt is timestamp &&
         request.resource.data.createdAt is timestamp &&
-        request.resource.data.role == 'member';
+        validUserRole(request.resource.data.role);
 
       // Only permit mutable profile fields from clients.
       allow update: if signedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'lastSeenAt']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'lastSeenAt']) &&
         request.resource.data.name is string &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() > 0 &&
         request.resource.data.lastSeenAt is timestamp &&
         request.resource.data.role == resource.data.role &&
         request.resource.data.createdAt == resource.data.createdAt;

@@ -1,6 +1,6 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
-import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db, firebaseConfigError } from './firebase';
 
@@ -11,6 +11,7 @@ type UserProfile = {
   id: string;
   name: string;
   role: UserRole;
+  email: string;
 };
 
 type AvailabilityByUser = Record<string, Record<string, AvailabilityStatus>>;
@@ -21,6 +22,12 @@ type PersistedState = {
   availability: AvailabilityByUser;
 };
 type PendingEditsByUser = Record<string, Record<string, AvailabilityStatus>>;
+
+const INITIAL_PERSISTED_STATE: PersistedState = {
+  users: [],
+  hostUserId: '',
+  availability: {}
+};
 
 type DateScoreSummary = {
   dateKey: string;
@@ -202,58 +209,75 @@ function getSettingsDocumentRef() {
 }
 
 function SignInPage({
+  authUserId,
+  onGoogleSignIn,
+  isGoogleSigningIn,
   onSignIn,
   error
 }: {
+  authUserId: string;
+  onGoogleSignIn: () => void;
+  isGoogleSigningIn: boolean;
   onSignIn: (username: string, inviteCode: string) => void;
   error: string;
 }) {
   const [username, setUsername] = useState('');
   const [inviteCode, setInviteCode] = useState('');
+  const hasGoogleSession = authUserId.length > 0;
 
   return (
     <section className="page-card sign-in-card">
       <h2>Join Scheduler</h2>
-      <p>Enter your invite code and username to access the calendar.</p>
+      <p>
+        {hasGoogleSession
+          ? 'Google account connected. Enter your invite code and username to access the calendar.'
+          : 'Sign in with Google first, then enter your invite code and username.'}
+      </p>
 
-      <form
-        className="sign-in-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSignIn(username, inviteCode);
-        }}
-      >
-        <label htmlFor="username-input">
-          Username
-          <input
-            id="username-input"
-            type="text"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            autoComplete="off"
-            maxLength={32}
-            required
-          />
-        </label>
+      {hasGoogleSession ? (
+        <form
+          className="sign-in-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSignIn(username, inviteCode);
+          }}
+        >
+          <label htmlFor="username-input">
+            Username
+            <input
+              id="username-input"
+              type="text"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="off"
+              maxLength={32}
+              required
+            />
+          </label>
 
-        <label htmlFor="invite-code-input">
-          Invite Code
-          <input
-            id="invite-code-input"
-            type="password"
-            value={inviteCode}
-            onChange={(event) => setInviteCode(event.target.value)}
-            autoComplete="off"
-            required
-          />
-        </label>
+          <label htmlFor="invite-code-input">
+            Invite Code
+            <input
+              id="invite-code-input"
+              type="password"
+              value={inviteCode}
+              onChange={(event) => setInviteCode(event.target.value)}
+              autoComplete="off"
+              required
+            />
+          </label>
 
-        {error ? <p className="form-error">{error}</p> : null}
-
-        <button type="submit" className="primary-button">
-          Enter
+          <button type="submit" className="primary-button">
+            Enter
+          </button>
+        </form>
+      ) : (
+        <button type="button" className="primary-button google-button" onClick={onGoogleSignIn} disabled={isGoogleSigningIn}>
+          {isGoogleSigningIn ? 'Connecting...' : 'Continue with Google'}
         </button>
-      </form>
+      )}
+
+      {error ? <p className="form-error">{error}</p> : null}
     </section>
   );
 }
@@ -294,6 +318,7 @@ function PersonalAvailabilityPage({
   const gridCells: Array<Date | null> = [...Array.from({ length: leadingEmptyCells }, () => null), ...monthDates];
   const trailingEmptyCells = (7 - (gridCells.length % 7)) % 7;
   gridCells.push(...Array.from({ length: trailingEmptyCells }, () => null));
+  const todayDateKey = toDateKey(new Date());
 
   return (
     <section className="page-card">
@@ -380,18 +405,33 @@ function PersonalAvailabilityPage({
 
           const dateKey = toDateKey(date);
           const status = getStatus(currentUser.id, dateKey);
+          const isPastDate = dateKey < todayDateKey;
+          const isToday = dateKey === todayDateKey;
 
           return (
             <button
               key={dateKey}
               type="button"
-              className={`day-cell day-${status}`}
+              className={`day-cell day-${status} ${isPastDate ? 'day-past' : ''} ${isToday ? 'day-today' : ''}`.trim()}
               role="gridcell"
-              onMouseDown={() => onStartPaint(dateKey)}
-              onMouseEnter={() => onPaintWhileDragging(dateKey)}
-              onClick={() => onPaintDate(dateKey)}
+              onMouseDown={() => {
+                if (!isPastDate) {
+                  onStartPaint(dateKey);
+                }
+              }}
+              onMouseEnter={() => {
+                if (!isPastDate) {
+                  onPaintWhileDragging(dateKey);
+                }
+              }}
+              onClick={() => {
+                if (!isPastDate) {
+                  onPaintDate(dateKey);
+                }
+              }}
               onDragStart={(event) => event.preventDefault()}
-              aria-label={`${formatDateKey(dateKey)}: ${getStatusLabel(status)}`}
+              aria-label={`${formatDateKey(dateKey)}: ${getStatusLabel(status)}${isPastDate ? ' (past date, locked)' : isToday ? ' (today)' : ''}`}
+              disabled={isPastDate}
             >
               <span className="day-number">{date.getDate()}</span>
               <span className="day-status">{getStatusLabel(status)}</span>
@@ -604,6 +644,7 @@ function AdminManagementPage({
             <label key={user.id} className="admin-row">
               <span>
                 <strong>{user.name}</strong>
+                <small>{user.email || 'No email on file yet'}</small>
                 <small>{user.role === 'admin' ? 'Admin' : 'Member'}</small>
               </span>
               <input
@@ -621,11 +662,7 @@ function AdminManagementPage({
 }
 
 export default function App() {
-  const [state, setState] = useState<PersistedState>({
-    users: [],
-    hostUserId: '',
-    availability: {}
-  });
+  const [state, setState] = useState<PersistedState>(INITIAL_PERSISTED_STATE);
   const [pendingEdits, setPendingEdits] = useState<PendingEditsByUser>({});
   const [authUserId, setAuthUserId] = useState('');
   const [sessionUserId, setSessionUserId] = useState('');
@@ -635,6 +672,7 @@ export default function App() {
   const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
   const [isSavingChanges, setIsSavingChanges] = useState(false);
   const [isPainting, setIsPainting] = useState(false);
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [signInError, setSignInError] = useState('');
   const [appError, setAppError] = useState('');
 
@@ -661,15 +699,9 @@ export default function App() {
         return;
       }
 
-      signInAnonymously(authInstance)
-        .then((credential) => {
-          setAuthUserId(credential.user.uid);
-          setAuthReady(true);
-        })
-        .catch(() => {
-          setSignInError('Unable to initialize sign-in. Check Firebase configuration.');
-          setAuthReady(true);
-        });
+      setAuthUserId('');
+      setSessionUserId('');
+      setAuthReady(true);
     });
 
     return () => unsubscribe();
@@ -681,6 +713,12 @@ export default function App() {
         setDataReady(true);
       }
 
+      return;
+    }
+
+    if (!authUserId) {
+      setState(INITIAL_PERSISTED_STATE);
+      setDataReady(true);
       return;
     }
 
@@ -713,6 +751,7 @@ export default function App() {
         snapshot.forEach((docSnapshot) => {
           const value = docSnapshot.data();
           const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+          const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
           const role = value.role;
 
           if (!name || !isUserRole(role)) {
@@ -722,7 +761,8 @@ export default function App() {
           users.push({
             id: docSnapshot.id,
             name,
-            role
+            role,
+            email
           });
         });
 
@@ -800,7 +840,7 @@ export default function App() {
       unsubscribeAvailability();
       unsubscribeSettings();
     };
-  }, [authReady]);
+  }, [authReady, authUserId]);
 
   useEffect(() => {
     if (!authUserId) {
@@ -974,6 +1014,7 @@ export default function App() {
   const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
     const username = normalizeName(usernameInput);
     const inviteCode = inviteCodeInput.trim();
+    const signedInEmail = auth?.currentUser?.email?.trim().toLowerCase() ?? '';
 
     if (!username) {
       setSignInError('Username is required.');
@@ -981,7 +1022,12 @@ export default function App() {
     }
 
     if (!authUserId) {
-      setSignInError('Authentication is not ready yet.');
+      setSignInError('Sign in with Google first.');
+      return;
+    }
+
+    if (!signedInEmail) {
+      setSignInError('Unable to confirm your Google account email.');
       return;
     }
 
@@ -1022,6 +1068,7 @@ export default function App() {
             userDocRef,
             {
               name: username,
+              email: signedInEmail,
               role: existingRole,
               lastSeenAt: serverTimestamp()
             },
@@ -1031,11 +1078,12 @@ export default function App() {
 
         return setDoc(
           userDocRef,
-          {
-            name: username,
-            role: inviteRole,
-            createdAt: serverTimestamp(),
-            lastSeenAt: serverTimestamp()
+            {
+              name: username,
+              email: signedInEmail,
+              role: inviteRole,
+              createdAt: serverTimestamp(),
+              lastSeenAt: serverTimestamp()
           },
           { merge: true }
         );
@@ -1062,6 +1110,26 @@ export default function App() {
       });
   };
 
+  const onGoogleSignIn = (): void => {
+    if (!auth || isGoogleSigningIn) {
+      return;
+    }
+
+    setIsGoogleSigningIn(true);
+    setSignInError('');
+
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    void signInWithPopup(auth, provider)
+      .catch(() => {
+        setSignInError('Unable to sign in with Google right now.');
+      })
+      .finally(() => {
+        setIsGoogleSigningIn(false);
+      });
+  };
+
   const onSetHostUserId = (userId: string): void => {
     if (!currentUser || currentUser.role !== 'admin') {
       return;
@@ -1083,6 +1151,7 @@ export default function App() {
   };
 
   const onSignOut = (): void => {
+    setState(INITIAL_PERSISTED_STATE);
     setSessionUserId('');
     setSignInError('');
     setAppError('');
@@ -1140,7 +1209,13 @@ export default function App() {
           <p>Invite-only scheduling board for your party.</p>
         </header>
         <main>
-          <SignInPage onSignIn={onSignIn} error={signInError} />
+          <SignInPage
+            authUserId={authUserId}
+            onGoogleSignIn={onGoogleSignIn}
+            isGoogleSigningIn={isGoogleSigningIn}
+            onSignIn={onSignIn}
+            error={signInError}
+          />
         </main>
       </div>
     );

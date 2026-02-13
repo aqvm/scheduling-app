@@ -4,10 +4,11 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 
 ## Features
 
-- Invite-code sign-in with username (`member` and `admin` access)
+- Google sign-in + invite-code onboarding (`member` and `admin` access)
 - Dark-mode calendar UI
 - Paint-style availability editing (click or click-drag)
 - Sunday-first month grid with month picker
+- Past dates are locked/greyed out, and today is highlighted
 - Host summary view (host + admin access)
 - Admin-only management page to view signed-in users and assign host
 - Realtime shared state across browser profiles/devices via Firestore
@@ -15,10 +16,11 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 ## Firebase Setup
 
 1. Create a Firebase project.
-2. In Firebase Console, enable `Authentication -> Sign-in method -> Anonymous`.
-3. Create a Firestore database in production mode.
-4. Copy `.env.example` to `.env.local` and fill in your Firebase values.
-5. In GitHub repo settings, add Actions secrets for Firebase (list below).
+2. In Firebase Console, enable `Authentication -> Sign-in method -> Google`.
+3. In Firebase Console, add your deployed domain under `Authentication -> Settings -> Authorized domains`.
+4. Create a Firestore database in production mode.
+5. Copy `.env.example` to `.env.local` and fill in your Firebase values.
+6. In GitHub repo settings, add Actions secrets for Firebase (list below).
 
 Required env vars:
 
@@ -59,6 +61,13 @@ Optional:
 - `VITE_FIREBASE_APP_NAMESPACE` (defaults to `default`)
 - `VITE_MEMBER_INVITE_CODE` (defaults to `party-members`)
 - `VITE_ADMIN_INVITE_CODE` (defaults to `owner-admin`)
+
+GitHub Actions secrets expected by `.github/workflows/deploy-firestore-rules.yml`:
+
+Required:
+
+- `FIREBASE_PROJECT_ID` (or repo variable `FIREBASE_PROJECT_ID`)
+- `FIREBASE_SERVICE_ACCOUNT` (JSON service account credential with Firestore rules deploy permissions)
 
 ## Firestore Rules Deploy (Optional CLI)
 

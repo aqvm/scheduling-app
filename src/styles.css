@@ -275,6 +275,10 @@ select {
   color: #dce8f6;
 }
 
+.day-cell:disabled {
+  cursor: not-allowed;
+}
+
 .day-cell:focus-visible {
   outline: 2px solid #5ca4e9;
   outline-offset: 1px;
@@ -313,6 +317,25 @@ select {
 .day-unavailable {
   background: rgba(104, 33, 33, 0.85);
   border-color: rgba(217, 103, 103, 0.75);
+}
+
+.day-cell.day-past {
+  background: rgba(36, 42, 49, 0.78);
+  border-color: rgba(98, 109, 123, 0.58);
+  color: #8f9baa;
+}
+
+.day-cell.day-past .day-status {
+  color: #8995a5;
+}
+
+.day-cell.day-today {
+  border-color: rgba(125, 198, 255, 0.95);
+  box-shadow: 0 0 0 2px rgba(71, 154, 219, 0.3);
+}
+
+.google-button {
+  margin-top: 1rem;
 }
 
 .kpi-grid {
