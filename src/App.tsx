@@ -1,7 +1,18 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
-import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  query,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  where,
+  limit
+} from 'firebase/firestore';
 import { auth, db, firebaseConfigError } from './firebase';
 
 type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavailable';
@@ -12,6 +23,15 @@ type UserProfile = {
   name: string;
   role: UserRole;
   email: string;
+};
+
+type CampaignInvite = {
+  code: string;
+  campaignId: string;
+  role: UserRole;
+  createdByUid: string;
+  redeemedByUid: string;
+  revoked: boolean;
 };
 
 type AvailabilityByUser = Record<string, Record<string, AvailabilityStatus>>;
@@ -38,8 +58,8 @@ type DateScoreSummary = {
   score: number;
 };
 
-const MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
-const ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
+const LEGACY_MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
+const LEGACY_ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
 const APP_NAMESPACE = import.meta.env.VITE_FIREBASE_APP_NAMESPACE ?? 'default';
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -153,6 +173,29 @@ function normalizeName(name: string): string {
   return name.trim().replace(/\s+/g, ' ');
 }
 
+function normalizeInviteCode(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function createInviteCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const segments = [4, 4, 4];
+  const chars: string[] = [];
+
+  segments.forEach((segmentLength, segmentIndex) => {
+    for (let index = 0; index < segmentLength; index += 1) {
+      const randomIndex = Math.floor(Math.random() * alphabet.length);
+      chars.push(alphabet[randomIndex]);
+    }
+
+    if (segmentIndex < segments.length - 1) {
+      chars.push('-');
+    }
+  });
+
+  return chars.join('');
+}
+
 function getStatusLabel(status: AvailabilityStatus): string {
   if (status === 'available') {
     return 'Available';
@@ -206,6 +249,11 @@ function getAvailabilityCollectionRef() {
 function getSettingsDocumentRef() {
   const appRef = getAppDocumentRef();
   return appRef ? doc(appRef, 'meta', 'settings') : null;
+}
+
+function getCampaignInvitesCollectionRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? collection(appRef, 'campaignInvites') : null;
 }
 
 function SignInPage({
@@ -613,15 +661,31 @@ function HostSummaryPage({
 
 function AdminManagementPage({
   currentUser,
+  campaignId,
   users,
   hostUserId,
-  setHostUserId
+  setHostUserId,
+  invites,
+  latestInviteCode,
+  inviteError,
+  isCreatingInvite,
+  onCreateInvite,
+  onRevokeInvite
 }: {
   currentUser: UserProfile;
+  campaignId: string;
   users: UserProfile[];
   hostUserId: string;
   setHostUserId: (userId: string) => void;
+  invites: CampaignInvite[];
+  latestInviteCode: string;
+  inviteError: string;
+  isCreatingInvite: boolean;
+  onCreateInvite: (role: UserRole) => void;
+  onRevokeInvite: (code: string) => void;
 }) {
+  const [newInviteRole, setNewInviteRole] = useState<UserRole>('member');
+
   if (currentUser.role !== 'admin') {
     return (
       <section className="page-card">
@@ -634,8 +698,68 @@ function AdminManagementPage({
   return (
     <section className="page-card">
       <h2>Admin Management</h2>
-      <p>Signed-in users and host assignment.</p>
+      <p>Campaign {campaignId} invites, users, and host assignment.</p>
 
+      <section className="summary-block">
+        <h3>Campaign Invites</h3>
+        <div className="invite-create-row">
+          <label className="month-picker" htmlFor="invite-role-select">
+            Role
+            <select
+              id="invite-role-select"
+              value={newInviteRole}
+              onChange={(event) => setNewInviteRole(event.target.value === 'admin' ? 'admin' : 'member')}
+            >
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => onCreateInvite(newInviteRole)}
+            disabled={isCreatingInvite}
+          >
+            {isCreatingInvite ? 'Creating...' : 'Create Invite Code'}
+          </button>
+        </div>
+        {latestInviteCode ? (
+          <p>
+            Latest invite: <code>{latestInviteCode}</code>
+          </p>
+        ) : null}
+        {inviteError ? <p className="form-error">{inviteError}</p> : null}
+
+        <div className="admin-list">
+          {invites.length === 0 ? (
+            <p className="empty-note">No invite codes created yet.</p>
+          ) : (
+            invites.map((invite) => (
+              <div key={invite.code} className="admin-row">
+                <span>
+                  <strong>{invite.code.toUpperCase()}</strong>
+                  <small>{invite.role === 'admin' ? 'Admin Invite' : 'Member Invite'}</small>
+                  <small>
+                    {invite.revoked
+                      ? 'Revoked'
+                      : invite.redeemedByUid
+                        ? `Redeemed by ${invite.redeemedByUid}`
+                        : 'Active'}
+                  </small>
+                </span>
+                {!invite.revoked && !invite.redeemedByUid ? (
+                  <button type="button" className="ghost-button" onClick={() => onRevokeInvite(invite.code)}>
+                    Revoke
+                  </button>
+                ) : null}
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="summary-block">
+        <h3>Host Assignment</h3>
       <div className="admin-list">
         {users.length === 0 ? (
           <p className="empty-note">No users have signed in yet.</p>
@@ -657,6 +781,7 @@ function AdminManagementPage({
           ))
         )}
       </div>
+      </section>
     </section>
   );
 }
@@ -673,6 +798,10 @@ export default function App() {
   const [isSavingChanges, setIsSavingChanges] = useState(false);
   const [isPainting, setIsPainting] = useState(false);
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
+  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+  const [invites, setInvites] = useState<CampaignInvite[]>([]);
+  const [latestInviteCode, setLatestInviteCode] = useState('');
+  const [inviteError, setInviteError] = useState('');
   const [signInError, setSignInError] = useState('');
   const [appError, setAppError] = useState('');
 
@@ -854,6 +983,57 @@ export default function App() {
   }, [authUserId, state.users]);
 
   useEffect(() => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      setInvites([]);
+      return;
+    }
+
+    const invitesRef = getCampaignInvitesCollectionRef();
+    if (!invitesRef) {
+      setInvites([]);
+      return;
+    }
+
+    const invitesQuery = query(invitesRef, where('campaignId', '==', APP_NAMESPACE), limit(100));
+    const unsubscribe = onSnapshot(
+      invitesQuery,
+      (snapshot) => {
+        const nextInvites: CampaignInvite[] = [];
+
+        snapshot.forEach((docSnapshot) => {
+          const value = docSnapshot.data();
+          const campaignId = typeof value.campaignId === 'string' ? value.campaignId : '';
+          const role = value.role;
+          const createdByUid = typeof value.createdByUid === 'string' ? value.createdByUid : '';
+          const redeemedByUid = typeof value.redeemedByUid === 'string' ? value.redeemedByUid : '';
+          const revoked = value.revoked === true;
+
+          if (!campaignId || !createdByUid || !isUserRole(role)) {
+            return;
+          }
+
+          nextInvites.push({
+            code: docSnapshot.id,
+            campaignId,
+            role,
+            createdByUid,
+            redeemedByUid,
+            revoked
+          });
+        });
+
+        nextInvites.sort((left, right) => right.code.localeCompare(left.code));
+        setInvites(nextInvites);
+      },
+      () => {
+        setInvites([]);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  useEffect(() => {
     const onMouseUp = () => setIsPainting(false);
     window.addEventListener('mouseup', onMouseUp);
     return () => window.removeEventListener('mouseup', onMouseUp);
@@ -1013,7 +1193,7 @@ export default function App() {
 
   const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
     const username = normalizeName(usernameInput);
-    const inviteCode = inviteCodeInput.trim();
+    const inviteCode = normalizeInviteCode(inviteCodeInput);
     const signedInEmail = auth?.currentUser?.email?.trim().toLowerCase() ?? '';
 
     if (!username) {
@@ -1031,70 +1211,110 @@ export default function App() {
       return;
     }
 
-    const usersRef = getUsersCollectionRef();
-    const settingsRef = getSettingsDocumentRef();
-    if (!usersRef || !settingsRef) {
+    if (!db) {
       setSignInError('Firebase is not configured.');
       return;
     }
 
-    let inviteRole: UserRole | null = null;
-    if (inviteCode === ADMIN_INVITE_CODE) {
-      inviteRole = 'admin';
-    } else if (inviteCode === MEMBER_INVITE_CODE) {
-      inviteRole = 'member';
-    }
-
-    if (!inviteRole) {
-      setSignInError('Invalid invite code.');
+    const usersRef = getUsersCollectionRef();
+    const settingsRef = getSettingsDocumentRef();
+    const invitesRef = getCampaignInvitesCollectionRef();
+    if (!usersRef || !settingsRef || !invitesRef) {
+      setSignInError('Firebase is not configured.');
       return;
     }
 
     const userDocRef = doc(usersRef, authUserId);
+    const inviteDocRef = doc(invitesRef, inviteCode);
 
-    void getDoc(userDocRef)
-      .then((snapshot) => {
-        if (snapshot.exists()) {
-          const existingRole = snapshot.data().role;
-          if (!isUserRole(existingRole)) {
-            throw new Error('Profile role is invalid.');
-          }
+    void runTransaction(db, async (transaction) => {
+      const inviteSnapshot = await transaction.get(inviteDocRef);
+      let inviteRole: UserRole | null = null;
+      let shouldRedeemInvite = false;
 
-          if (existingRole !== inviteRole) {
-            throw new Error('This browser profile is already registered with a different invite type.');
-          }
+      if (inviteSnapshot.exists()) {
+        const inviteValue = inviteSnapshot.data();
+        const campaignId = typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
+        const inviteRoleValue = inviteValue.role;
+        const redeemedByUid = typeof inviteValue.redeemedByUid === 'string' ? inviteValue.redeemedByUid : '';
+        const revoked = inviteValue.revoked === true;
 
-          return setDoc(
-            userDocRef,
-            {
-              name: username,
-              email: signedInEmail,
-              role: existingRole,
-              lastSeenAt: serverTimestamp()
-            },
-            { merge: true }
-          );
+        if (!campaignId || campaignId !== APP_NAMESPACE) {
+          throw new Error('This invite code is for a different campaign.');
         }
 
-        return setDoc(
+        if (!isUserRole(inviteRoleValue)) {
+          throw new Error('Invite code role is invalid.');
+        }
+
+        if (revoked) {
+          throw new Error('This invite code has been revoked.');
+        }
+
+        if (redeemedByUid && redeemedByUid !== authUserId) {
+          throw new Error('This invite code has already been used.');
+        }
+
+        inviteRole = inviteRoleValue;
+        shouldRedeemInvite = !redeemedByUid;
+      } else {
+        // Bootstrap fallback for environments still using static invite codes.
+        if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
+          inviteRole = 'admin';
+        } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
+          inviteRole = 'member';
+        }
+      }
+
+      if (!inviteRole) {
+        throw new Error('Invalid invite code.');
+      }
+
+      const userSnapshot = await transaction.get(userDocRef);
+      if (userSnapshot.exists()) {
+        const existingRole = userSnapshot.data().role;
+        if (!isUserRole(existingRole)) {
+          throw new Error('Profile role is invalid.');
+        }
+
+        if (existingRole !== inviteRole) {
+          throw new Error('This Google profile is already registered with a different invite type.');
+        }
+
+        transaction.set(
           userDocRef,
-            {
-              name: username,
-              email: signedInEmail,
-              role: inviteRole,
-              createdAt: serverTimestamp(),
-              lastSeenAt: serverTimestamp()
+          {
+            name: username,
+            email: signedInEmail,
+            role: existingRole,
+            lastSeenAt: serverTimestamp()
           },
           { merge: true }
         );
-      })
-      .then(() => {
-        if (!state.hostUserId) {
-          return setDoc(settingsRef, { hostUserId: authUserId, updatedAt: serverTimestamp() }, { merge: true });
-        }
+      } else {
+        transaction.set(
+          userDocRef,
+          {
+            name: username,
+            email: signedInEmail,
+            role: inviteRole,
+            createdAt: serverTimestamp(),
+            lastSeenAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+      }
 
-        return Promise.resolve();
-      })
+      if (!state.hostUserId) {
+        transaction.set(settingsRef, { hostUserId: authUserId, updatedAt: serverTimestamp() }, { merge: true });
+      }
+
+      if (shouldRedeemInvite) {
+        transaction.update(inviteDocRef, {
+          redeemedByUid: authUserId
+        });
+      }
+    })
       .then(() => {
         setSessionUserId(authUserId);
         setSignInError('');
@@ -1130,6 +1350,65 @@ export default function App() {
       });
   };
 
+  const onCreateInvite = (role: UserRole): void => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return;
+    }
+
+    const invitesRef = getCampaignInvitesCollectionRef();
+    if (!invitesRef) {
+      setInviteError('Firebase is not configured.');
+      return;
+    }
+
+    const inviteCode = createInviteCode();
+    const inviteCodeId = normalizeInviteCode(inviteCode);
+
+    setInviteError('');
+    setIsCreatingInvite(true);
+
+    void setDoc(doc(invitesRef, inviteCodeId), {
+      campaignId: APP_NAMESPACE,
+      role,
+      createdByUid: currentUser.id,
+      createdAt: serverTimestamp(),
+      revoked: false,
+      redeemedByUid: ''
+    })
+      .then(() => {
+        setLatestInviteCode(inviteCode);
+      })
+      .catch(() => {
+        setInviteError('Unable to create invite code.');
+      })
+      .finally(() => {
+        setIsCreatingInvite(false);
+      });
+  };
+
+  const onRevokeInvite = (code: string): void => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return;
+    }
+
+    const invitesRef = getCampaignInvitesCollectionRef();
+    if (!invitesRef) {
+      setInviteError('Firebase is not configured.');
+      return;
+    }
+
+    setInviteError('');
+    void setDoc(
+      doc(invitesRef, code),
+      {
+        revoked: true
+      },
+      { merge: true }
+    ).catch(() => {
+      setInviteError('Unable to revoke invite code.');
+    });
+  };
+
   const onSetHostUserId = (userId: string): void => {
     if (!currentUser || currentUser.role !== 'admin') {
       return;
@@ -1153,6 +1432,9 @@ export default function App() {
   const onSignOut = (): void => {
     setState(INITIAL_PERSISTED_STATE);
     setSessionUserId('');
+    setInvites([]);
+    setLatestInviteCode('');
+    setInviteError('');
     setSignInError('');
     setAppError('');
     setIsPainting(false);
@@ -1300,9 +1582,16 @@ export default function App() {
             element={
               <AdminManagementPage
                 currentUser={currentUser}
+                campaignId={APP_NAMESPACE}
                 users={state.users}
                 hostUserId={state.hostUserId}
                 setHostUserId={onSetHostUserId}
+                invites={invites}
+                latestInviteCode={latestInviteCode}
+                inviteError={inviteError}
+                isCreatingInvite={isCreatingInvite}
+                onCreateInvite={onCreateInvite}
+                onRevokeInvite={onRevokeInvite}
               />
             }
           />
