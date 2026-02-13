@@ -5,13 +5,49 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function validUserRole(role) {
+      return role == 'member' || role == 'admin';
+    }
+
     function isAdmin(appNamespace, uid) {
-      return get(/databases/$(database)/documents/apps/$(appNamespace)/users/$(uid)).data.role == 'admin';
+      return signedIn() &&
+        exists(/databases/$(database)/documents/apps/$(appNamespace)/users/$(uid)) &&
+        get(/databases/$(database)/documents/apps/$(appNamespace)/users/$(uid)).data.role == 'admin';
     }
 
     match /apps/{appNamespace}/users/{userId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && request.auth.uid == userId;
+
+      // Client profile bootstrap. Role is restricted to member so admin elevation
+      // must happen through a server-controlled path.
+      allow create: if signedIn() &&
+        request.auth.uid == userId &&
+        request.resource.data.keys().hasOnly(['name', 'role', 'createdAt', 'lastSeenAt']) &&
+        request.resource.data.name is string &&
+        request.resource.data.lastSeenAt is timestamp &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.role == 'member';
+
+      // Only permit mutable profile fields from clients.
+      allow update: if signedIn() &&
+        request.auth.uid == userId &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'lastSeenAt']) &&
+        request.resource.data.name is string &&
+        request.resource.data.lastSeenAt is timestamp &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if false;
+    }
+
+    // Admin-controlled role assignment path (or replace with Cloud Functions).
+    match /apps/{appNamespace}/adminRoleAssignments/{userId} {
+      allow read: if signedIn() && isAdmin(appNamespace, request.auth.uid);
+      allow create, update: if signedIn() &&
+        isAdmin(appNamespace, request.auth.uid) &&
+        request.resource.data.keys().hasOnly(['role', 'updatedAt']) &&
+        validUserRole(request.resource.data.role) &&
+        request.resource.data.updatedAt is timestamp;
       allow delete: if false;
     }
 
