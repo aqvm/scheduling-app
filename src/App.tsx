@@ -1,827 +1,122 @@
-import { NavLink, Route, Routes } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
+import { NavLink, Route, Routes } from 'react-router-dom';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
-import {
-  collection,
-  doc,
-  getDoc,
-  onSnapshot,
-  query,
-  runTransaction,
-  serverTimestamp,
-  setDoc,
-  where,
-  limit
-} from 'firebase/firestore';
+import { doc, limit, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { auth, db, firebaseConfigError } from './firebase';
-
-type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavailable';
-type UserRole = 'member' | 'admin';
-
-type UserProfile = {
-  id: string;
-  name: string;
-  role: UserRole;
-  email: string;
-};
-
-type CampaignInvite = {
-  code: string;
-  campaignId: string;
-  role: UserRole;
-  createdByUid: string;
-  redeemedByUid: string;
-  revoked: boolean;
-};
-
-type AvailabilityByUser = Record<string, Record<string, AvailabilityStatus>>;
-
-type PersistedState = {
-  users: UserProfile[];
-  hostUserId: string;
-  availability: AvailabilityByUser;
-};
-type PendingEditsByUser = Record<string, Record<string, AvailabilityStatus>>;
-
-const INITIAL_PERSISTED_STATE: PersistedState = {
-  users: [],
-  hostUserId: '',
-  availability: {}
-};
-
-type DateScoreSummary = {
-  dateKey: string;
-  availableCount: number;
-  maybeCount: number;
-  unavailableCount: number;
-  unspecifiedCount: number;
-  score: number;
-};
-
-const LEGACY_MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
-const LEGACY_ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
-const APP_NAMESPACE = import.meta.env.VITE_FIREBASE_APP_NAMESPACE ?? 'default';
-
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const PAINT_OPTIONS: Array<{ status: AvailabilityStatus; label: string }> = [
-  { status: 'available', label: 'Available' },
-  { status: 'maybe', label: 'Maybe' },
-  { status: 'unavailable', label: 'Unavailable' },
-  { status: 'unspecified', label: 'Clear' }
-];
-const MONTH_NAME_OPTIONS = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December'
-];
-
-function padTwo(value: number): string {
-  return String(value).padStart(2, '0');
-}
-
-function toDateKey(date: Date): string {
-  return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}-${padTwo(date.getDate())}`;
-}
-
-function toMonthValue(date: Date): string {
-  return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}`;
-}
-
-function isValidMonthValue(value: string): boolean {
-  return /^\d{4}-\d{2}$/.test(value);
-}
-
-function parseMonthValue(value: string): { year: number; month: number } {
-  if (!isValidMonthValue(value)) {
-    const today = new Date();
-    return { year: today.getFullYear(), month: today.getMonth() + 1 };
-  }
-
-  const [yearPart, monthPart] = value.split('-');
-  const year = Number(yearPart);
-  const month = Number(monthPart);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
-    const today = new Date();
-    return { year: today.getFullYear(), month: today.getMonth() + 1 };
-  }
-
-  return { year, month };
-}
-
-function getMonthDates(monthValue: string): Date[] {
-  const { year, month } = parseMonthValue(monthValue);
-
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const dates: Date[] = [];
-
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    dates.push(new Date(year, month - 1, day));
-  }
-
-  return dates;
-}
-
-function getMonthLabel(monthDates: Date[]): string {
-  if (monthDates.length === 0) {
-    return '';
-  }
-
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    year: 'numeric'
-  }).format(monthDates[0]);
-}
-
-function formatDateKey(dateKey: string): string {
-  const [yearPart, monthPart, dayPart] = dateKey.split('-');
-  const year = Number(yearPart);
-  const month = Number(monthPart);
-  const day = Number(dayPart);
-
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return dateKey;
-  }
-
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric'
-  }).format(new Date(year, month - 1, day));
-}
-
-function isAvailabilityStatus(value: unknown): value is AvailabilityStatus {
-  return (
-    typeof value === 'string' &&
-    (value === 'unspecified' || value === 'available' || value === 'maybe' || value === 'unavailable')
-  );
-}
-
-function isUserRole(value: unknown): value is UserRole {
-  return value === 'member' || value === 'admin';
-}
-
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ');
-}
-
-function normalizeInviteCode(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function createInviteCode(): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const segments = [4, 4, 4];
-  const chars: string[] = [];
-
-  segments.forEach((segmentLength, segmentIndex) => {
-    for (let index = 0; index < segmentLength; index += 1) {
-      const randomIndex = Math.floor(Math.random() * alphabet.length);
-      chars.push(alphabet[randomIndex]);
-    }
-
-    if (segmentIndex < segments.length - 1) {
-      chars.push('-');
-    }
-  });
-
-  return chars.join('');
-}
-
-function getStatusLabel(status: AvailabilityStatus): string {
-  if (status === 'available') {
-    return 'Available';
-  }
-
-  if (status === 'maybe') {
-    return 'Maybe';
-  }
-
-  if (status === 'unavailable') {
-    return 'Unavailable';
-  }
-
-  return 'Unspecified';
-}
-
-function getStatusScore(status: AvailabilityStatus): number {
-  if (status === 'available') {
-    return 2;
-  }
-
-  if (status === 'maybe') {
-    return 1;
-  }
-
-  if (status === 'unavailable') {
-    return -2;
-  }
-
-  return 0;
-}
-
-function getAppDocumentRef() {
-  if (!db) {
-    return null;
-  }
-
-  return doc(db, 'apps', APP_NAMESPACE);
-}
-
-function getUsersCollectionRef() {
-  const appRef = getAppDocumentRef();
-  return appRef ? collection(appRef, 'users') : null;
-}
-
-function getAvailabilityCollectionRef() {
-  const appRef = getAppDocumentRef();
-  return appRef ? collection(appRef, 'availability') : null;
-}
-
-function getSettingsDocumentRef() {
-  const appRef = getAppDocumentRef();
-  return appRef ? doc(appRef, 'meta', 'settings') : null;
-}
-
-function getCampaignInvitesCollectionRef() {
-  const appRef = getAppDocumentRef();
-  return appRef ? collection(appRef, 'campaignInvites') : null;
-}
-
-function SignInPage({
-  authUserId,
-  onGoogleSignIn,
-  isGoogleSigningIn,
-  onSignIn,
-  error
-}: {
-  authUserId: string;
-  onGoogleSignIn: () => void;
-  isGoogleSigningIn: boolean;
-  onSignIn: (username: string, inviteCode: string) => void;
-  error: string;
-}) {
-  const [username, setUsername] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
-  const hasGoogleSession = authUserId.length > 0;
-
-  return (
-    <section className="page-card sign-in-card">
-      <h2>Join Scheduler</h2>
-      <p>
-        {hasGoogleSession
-          ? 'Google account connected. Enter your invite code and username to access the calendar.'
-          : 'Sign in with Google first, then enter your invite code and username.'}
-      </p>
-
-      {hasGoogleSession ? (
-        <form
-          className="sign-in-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSignIn(username, inviteCode);
-          }}
-        >
-          <label htmlFor="username-input">
-            Username
-            <input
-              id="username-input"
-              type="text"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="off"
-              maxLength={32}
-              required
-            />
-          </label>
-
-          <label htmlFor="invite-code-input">
-            Invite Code
-            <input
-              id="invite-code-input"
-              type="password"
-              value={inviteCode}
-              onChange={(event) => setInviteCode(event.target.value)}
-              autoComplete="off"
-              required
-            />
-          </label>
-
-          <button type="submit" className="primary-button">
-            Enter
-          </button>
-        </form>
-      ) : (
-        <button type="button" className="primary-button google-button" onClick={onGoogleSignIn} disabled={isGoogleSigningIn}>
-          {isGoogleSigningIn ? 'Connecting...' : 'Continue with Google'}
-        </button>
-      )}
-
-      {error ? <p className="form-error">{error}</p> : null}
-    </section>
-  );
-}
-
-function PersonalAvailabilityPage({
-  currentUser,
-  monthDates,
-  monthValue,
-  setMonthValue,
-  paintStatus,
-  setPaintStatus,
-  getStatus,
-  onStartPaint,
-  onPaintWhileDragging,
-  onPaintDate,
-  hasUnsavedChanges,
-  isSaving,
-  onSaveChanges
-}: {
-  currentUser: UserProfile;
-  monthDates: Date[];
-  monthValue: string;
-  setMonthValue: (value: string) => void;
-  paintStatus: AvailabilityStatus;
-  setPaintStatus: (status: AvailabilityStatus) => void;
-  getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
-  onStartPaint: (dateKey: string) => void;
-  onPaintWhileDragging: (dateKey: string) => void;
-  onPaintDate: (dateKey: string) => void;
-  hasUnsavedChanges: boolean;
-  isSaving: boolean;
-  onSaveChanges: () => void;
-}) {
-  const monthLabel = getMonthLabel(monthDates);
-  const selectedMonthParts = parseMonthValue(monthValue);
-  const yearOptions = Array.from({ length: 11 }, (_, index) => selectedMonthParts.year - 5 + index);
-  const leadingEmptyCells = monthDates.length > 0 ? monthDates[0].getDay() : 0;
-  const gridCells: Array<Date | null> = [...Array.from({ length: leadingEmptyCells }, () => null), ...monthDates];
-  const trailingEmptyCells = (7 - (gridCells.length % 7)) % 7;
-  gridCells.push(...Array.from({ length: trailingEmptyCells }, () => null));
-  const todayDateKey = toDateKey(new Date());
-
-  return (
-    <section className="page-card">
-      <h2>My Availability</h2>
-      <p>You can only edit your own schedule. Choose a paint mode, then click and drag across days.</p>
-
-      <div className="month-row">
-        <h3 className="month-heading">{monthLabel}</h3>
-        <div className="month-picker-group" aria-label="Month picker">
-          <label className="month-picker" htmlFor="month-name-select">
-            Month
-            <select
-              id="month-name-select"
-              value={String(selectedMonthParts.month)}
-              onChange={(event) =>
-                setMonthValue(`${selectedMonthParts.year}-${padTwo(Number(event.target.value))}`)
-              }
-            >
-              {MONTH_NAME_OPTIONS.map((label, index) => (
-                <option key={label} value={String(index + 1)}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="month-picker" htmlFor="month-year-select">
-            Year
-            <select
-              id="month-year-select"
-              value={String(selectedMonthParts.year)}
-              onChange={(event) =>
-                setMonthValue(`${event.target.value}-${padTwo(selectedMonthParts.month)}`)
-              }
-            >
-              {yearOptions.map((year) => (
-                <option key={year} value={String(year)}>
-                  {year}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </div>
-
-      <div className="paint-toolbar" role="toolbar" aria-label="Paint status">
-        {PAINT_OPTIONS.map((option) => (
-          <button
-            key={option.status}
-            type="button"
-            className={`paint-button paint-${option.status} ${
-              paintStatus === option.status ? 'paint-selected' : ''
-            }`}
-            onClick={() => setPaintStatus(option.status)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="save-row">
-        <button
-          type="button"
-          className="primary-button"
-          onClick={onSaveChanges}
-          disabled={!hasUnsavedChanges || isSaving}
-        >
-          {isSaving ? 'Saving...' : 'Save Changes'}
-        </button>
-        <span className="save-note">{hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved'}</span>
-      </div>
-
-      <div className="calendar-grid" role="grid" aria-label={`${monthLabel} availability calendar`}>
-        {WEEKDAY_LABELS.map((weekday) => (
-          <div key={weekday} className="weekday-cell" role="columnheader">
-            {weekday}
-          </div>
-        ))}
-
-        {gridCells.map((date, index) => {
-          if (!date) {
-            return <div key={`empty-${index}`} className="day-cell empty-cell" aria-hidden="true" />;
-          }
-
-          const dateKey = toDateKey(date);
-          const status = getStatus(currentUser.id, dateKey);
-          const isPastDate = dateKey < todayDateKey;
-          const isToday = dateKey === todayDateKey;
-
-          return (
-            <button
-              key={dateKey}
-              type="button"
-              className={`day-cell day-${status} ${isPastDate ? 'day-past' : ''} ${isToday ? 'day-today' : ''}`.trim()}
-              role="gridcell"
-              onMouseDown={() => {
-                if (!isPastDate) {
-                  onStartPaint(dateKey);
-                }
-              }}
-              onMouseEnter={() => {
-                if (!isPastDate) {
-                  onPaintWhileDragging(dateKey);
-                }
-              }}
-              onClick={() => {
-                if (!isPastDate) {
-                  onPaintDate(dateKey);
-                }
-              }}
-              onDragStart={(event) => event.preventDefault()}
-              aria-label={`${formatDateKey(dateKey)}: ${getStatusLabel(status)}${isPastDate ? ' (past date, locked)' : isToday ? ' (today)' : ''}`}
-              disabled={isPastDate}
-            >
-              <span className="day-number">{date.getDate()}</span>
-              <span className="day-status">{getStatusLabel(status)}</span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function HostSummaryPage({
-  users,
-  currentUser,
-  hostUserId,
-  monthDateKeys,
-  getStatus
-}: {
-  users: UserProfile[];
-  currentUser: UserProfile;
-  hostUserId: string;
-  monthDateKeys: string[];
-  getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
-}) {
-  const canView = currentUser.role === 'admin' || currentUser.id === hostUserId;
-
-  if (!canView) {
-    return (
-      <section className="page-card">
-        <h2>Host Summary</h2>
-        <p>This page is available only to the selected host and admin.</p>
-      </section>
-    );
-  }
-
-  const allGreenDates = monthDateKeys.filter(
-    (dateKey) => users.length > 0 && users.every((user) => getStatus(user.id, dateKey) === 'available')
-  );
-  const anyRedDates = monthDateKeys.filter((dateKey) =>
-    users.some((user) => getStatus(user.id, dateKey) === 'unavailable')
-  );
-  const rankedDateSummaries = useMemo(() => {
-    const dateSummaries: DateScoreSummary[] = monthDateKeys.map((dateKey) => {
-      let availableCount = 0;
-      let maybeCount = 0;
-      let unavailableCount = 0;
-      let unspecifiedCount = 0;
-      let score = 0;
-
-      users.forEach((user) => {
-        const status = getStatus(user.id, dateKey);
-        score += getStatusScore(status);
-
-        if (status === 'available') {
-          availableCount += 1;
-          return;
-        }
-
-        if (status === 'maybe') {
-          maybeCount += 1;
-          return;
-        }
-
-        if (status === 'unavailable') {
-          unavailableCount += 1;
-          return;
-        }
-
-        unspecifiedCount += 1;
-      });
-
-      return {
-        dateKey,
-        availableCount,
-        maybeCount,
-        unavailableCount,
-        unspecifiedCount,
-        score
-      };
-    });
-
-    return dateSummaries.sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-
-      if (left.unavailableCount !== right.unavailableCount) {
-        return left.unavailableCount - right.unavailableCount;
-      }
-
-      if (right.availableCount !== left.availableCount) {
-        return right.availableCount - left.availableCount;
-      }
-
-      return left.dateKey.localeCompare(right.dateKey);
-    });
-  }, [monthDateKeys, users, getStatus]);
-  const topCandidateDates = rankedDateSummaries.slice(0, 5);
-
-  return (
-    <section className="page-card">
-      <h2>Host Summary</h2>
-      <p>Month view for all signed-in users.</p>
-
-      <div className="kpi-grid">
-        <article>
-          <h3>{users.length}</h3>
-          <p>Total Signed-In Users</p>
-        </article>
-        <article>
-          <h3>{allGreenDates.length}</h3>
-          <p>Dates Fully Green</p>
-        </article>
-        <article>
-          <h3>{anyRedDates.length}</h3>
-          <p>Dates With Any Red</p>
-        </article>
-      </div>
-
-      <section className="summary-block">
-        <h3>Top Candidate Dates</h3>
-        {topCandidateDates.length === 0 ? (
-          <p className="empty-note">No dates in this month yet.</p>
-        ) : (
-          <ul className="list-reset">
-            {topCandidateDates.map((dateSummary) => (
-              <li key={dateSummary.dateKey} className="summary-row">
-                <strong>{formatDateKey(dateSummary.dateKey)}</strong>
-                <span className="summary-score">Score: {dateSummary.score}</span>
-                <span>
-                  Available {dateSummary.availableCount} · Maybe {dateSummary.maybeCount} · Unavailable{' '}
-                  {dateSummary.unavailableCount}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="summary-block">
-        <h3>Availability Matrix</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Score</th>
-                {users.map((user) => (
-                  <th key={user.id}>{user.name}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rankedDateSummaries.map((dateSummary) => (
-                <tr key={dateSummary.dateKey} className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
-                  <td>{formatDateKey(dateSummary.dateKey)}</td>
-                  <td>
-                    <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
-                      {dateSummary.score}
-                    </span>
-                  </td>
-                  {users.map((user) => {
-                    const status = getStatus(user.id, dateSummary.dateKey);
-                    return (
-                      <td key={`${dateSummary.dateKey}-${user.id}`}>
-                        <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </section>
-  );
-}
-
-function AdminManagementPage({
-  currentUser,
-  campaignId,
-  users,
-  hostUserId,
-  setHostUserId,
-  invites,
-  latestInviteCode,
-  inviteError,
-  isCreatingInvite,
-  onCreateInvite,
-  onRevokeInvite
-}: {
-  currentUser: UserProfile;
-  campaignId: string;
-  users: UserProfile[];
-  hostUserId: string;
-  setHostUserId: (userId: string) => void;
-  invites: CampaignInvite[];
-  latestInviteCode: string;
-  inviteError: string;
-  isCreatingInvite: boolean;
-  onCreateInvite: (role: UserRole) => void;
-  onRevokeInvite: (code: string) => void;
-}) {
-  const [newInviteRole, setNewInviteRole] = useState<UserRole>('member');
-
-  if (currentUser.role !== 'admin') {
-    return (
-      <section className="page-card">
-        <h2>Admin Management</h2>
-        <p>Only admin can access this page.</p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="page-card">
-      <h2>Admin Management</h2>
-      <p>Campaign {campaignId} invites, users, and host assignment.</p>
-
-      <section className="summary-block">
-        <h3>Campaign Invites</h3>
-        <div className="invite-create-row">
-          <label className="month-picker" htmlFor="invite-role-select">
-            Role
-            <select
-              id="invite-role-select"
-              value={newInviteRole}
-              onChange={(event) => setNewInviteRole(event.target.value === 'admin' ? 'admin' : 'member')}
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() => onCreateInvite(newInviteRole)}
-            disabled={isCreatingInvite}
-          >
-            {isCreatingInvite ? 'Creating...' : 'Create Invite Code'}
-          </button>
-        </div>
-        {latestInviteCode ? (
-          <p>
-            Latest invite: <code>{latestInviteCode}</code>
-          </p>
-        ) : null}
-        {inviteError ? <p className="form-error">{inviteError}</p> : null}
-
-        <div className="admin-list">
-          {invites.length === 0 ? (
-            <p className="empty-note">No invite codes created yet.</p>
-          ) : (
-            invites.map((invite) => (
-              <div key={invite.code} className="admin-row">
-                <span>
-                  <strong>{invite.code.toUpperCase()}</strong>
-                  <small>{invite.role === 'admin' ? 'Admin Invite' : 'Member Invite'}</small>
-                  <small>
-                    {invite.revoked
-                      ? 'Revoked'
-                      : invite.redeemedByUid
-                        ? `Redeemed by ${invite.redeemedByUid}`
-                        : 'Active'}
-                  </small>
-                </span>
-                {!invite.revoked && !invite.redeemedByUid ? (
-                  <button type="button" className="ghost-button" onClick={() => onRevokeInvite(invite.code)}>
-                    Revoke
-                  </button>
-                ) : null}
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
-      <section className="summary-block">
-        <h3>Host Assignment</h3>
-      <div className="admin-list">
-        {users.length === 0 ? (
-          <p className="empty-note">No users have signed in yet.</p>
-        ) : (
-          users.map((user) => (
-            <label key={user.id} className="admin-row">
-              <span>
-                <strong>{user.name}</strong>
-                <small>{user.email || 'No email on file yet'}</small>
-                <small>{user.role === 'admin' ? 'Admin' : 'Member'}</small>
-              </span>
-              <input
-                type="radio"
-                name="host-user"
-                checked={hostUserId === user.id}
-                onChange={() => setHostUserId(user.id)}
-              />
-            </label>
-          ))
-        )}
-      </div>
-      </section>
-    </section>
-  );
-}
-
+import { AdminManagementPage } from './features/admin/AdminManagementPage';
+import { SignInPage } from './features/auth/SignInPage';
+import { PersonalAvailabilityPage } from './features/availability/PersonalAvailabilityPage';
+import { HostSummaryPage } from './features/host/HostSummaryPage';
+import {
+  APP_NAMESPACE,
+  LEGACY_ADMIN_INVITE_CODE,
+  LEGACY_MEMBER_INVITE_CODE
+} from './shared/scheduler/constants';
+import { getMonthDates, isValidMonthValue, toDateKey, toMonthValue } from './shared/scheduler/date';
+import {
+  getAvailabilityCollectionRef,
+  getCampaignInvitesCollectionRef,
+  getSettingsDocumentRef,
+  getUsersCollectionRef
+} from './shared/scheduler/firebaseRefs';
+import { createInviteCode } from './shared/scheduler/invite';
+import {
+  INITIAL_PERSISTED_STATE,
+  type AvailabilityByUser,
+  type AvailabilityStatus,
+  type CampaignInvite,
+  type PendingEditsByUser,
+  type PersistedState,
+  type UserRole
+} from './shared/scheduler/types';
+import { isAvailabilityStatus, isUserRole, normalizeInviteCode, normalizeName } from './shared/scheduler/validation';
+
+/**
+ * Root application component.
+ *
+ * Responsibilities:
+ * - coordinate auth and Firestore subscriptions
+ * - manage local unsaved calendar edits
+ * - expose action handlers to feature pages
+ * - route between availability, host, and admin views
+ */
 export default function App() {
+  /**
+   * Snapshot-backed campaign state.
+   */
   const [state, setState] = useState<PersistedState>(INITIAL_PERSISTED_STATE);
+
+  /**
+   * Local unsaved edits per user/day.
+   */
   const [pendingEdits, setPendingEdits] = useState<PendingEditsByUser>({});
+
+  /**
+   * `authUserId` tracks current Firebase Auth session.
+   * `sessionUserId` tracks app-level signed-in profile after invite validation.
+   */
   const [authUserId, setAuthUserId] = useState('');
   const [sessionUserId, setSessionUserId] = useState('');
+
+  /**
+   * Readiness flags used for loading states.
+   */
   const [authReady, setAuthReady] = useState(false);
   const [dataReady, setDataReady] = useState(false);
+
+  /**
+   * Calendar UI controls.
+   */
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toMonthValue(new Date()));
   const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
+
+  /**
+   * Request and interaction flags.
+   */
   const [isSavingChanges, setIsSavingChanges] = useState(false);
   const [isPainting, setIsPainting] = useState(false);
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+
+  /**
+   * Admin invite state.
+   */
   const [invites, setInvites] = useState<CampaignInvite[]>([]);
   const [latestInviteCode, setLatestInviteCode] = useState('');
   const [inviteError, setInviteError] = useState('');
+
+  /**
+   * UI errors surfaced to users.
+   */
   const [signInError, setSignInError] = useState('');
   const [appError, setAppError] = useState('');
 
+  /**
+   * Derived identity and view permissions.
+   */
   const currentUser = state.users.find((user) => user.id === sessionUserId) ?? null;
   const hostUser = state.users.find((user) => user.id === state.hostUserId) ?? null;
   const canViewHostSummary =
     currentUser !== null && (currentUser.role === 'admin' || currentUser.id === state.hostUserId);
+
+  /**
+   * Derived edit/read models for current month.
+   */
   const currentUserPendingEdits = currentUser ? pendingEdits[currentUser.id] ?? {} : {};
   const hasUnsavedChanges = Object.keys(currentUserPendingEdits).length > 0;
   const monthDates = useMemo(() => getMonthDates(selectedMonth), [selectedMonth]);
   const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
 
+  /**
+   * Listen to Firebase Auth session changes.
+   */
   useEffect(() => {
     if (!auth) {
       setAuthReady(true);
       return;
     }
 
-    const authInstance = auth;
-    const unsubscribe = onAuthStateChanged(authInstance, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAuthUserId(user.uid);
         setAuthReady(true);
@@ -836,6 +131,10 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  /**
+   * Subscribe to campaign datasets once auth is ready.
+   * We intentionally gate `dataReady` until all three snapshot streams report once.
+   */
   useEffect(() => {
     if (!db || !authReady) {
       if (!db) {
@@ -875,29 +174,29 @@ export default function App() {
     const unsubscribeUsers = onSnapshot(
       usersRef,
       (snapshot) => {
-        const users: UserProfile[] = [];
+        const users = snapshot.docs
+          .map((docSnapshot) => {
+            const value = docSnapshot.data();
+            const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+            const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+            const role = value.role;
 
-        snapshot.forEach((docSnapshot) => {
-          const value = docSnapshot.data();
-          const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
-          const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
-          const role = value.role;
+            if (!name || !isUserRole(role)) {
+              return null;
+            }
 
-          if (!name || !isUserRole(role)) {
-            return;
-          }
-
-          users.push({
-            id: docSnapshot.id,
-            name,
-            role,
-            email
-          });
-        });
+            return {
+              id: docSnapshot.id,
+              name,
+              role,
+              email
+            };
+          })
+          .filter((user): user is NonNullable<typeof user> => user !== null);
 
         setState((current) => ({
           ...current,
-          users: users.sort((a, b) => a.name.localeCompare(b.name))
+          users: users.sort((left, right) => left.name.localeCompare(right.name))
         }));
         usersLoaded = true;
         maybeMarkReady();
@@ -971,6 +270,9 @@ export default function App() {
     };
   }, [authReady, authUserId]);
 
+  /**
+   * Auto-establish app session when auth user already exists in campaign users.
+   */
   useEffect(() => {
     if (!authUserId) {
       setSessionUserId('');
@@ -982,6 +284,9 @@ export default function App() {
     }
   }, [authUserId, state.users]);
 
+  /**
+   * Subscribe admin users to invite documents.
+   */
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'admin') {
       setInvites([]);
@@ -1033,12 +338,19 @@ export default function App() {
     return () => unsubscribe();
   }, [currentUser]);
 
+  /**
+   * End drag-paint mode on global mouse release.
+   */
   useEffect(() => {
     const onMouseUp = () => setIsPainting(false);
     window.addEventListener('mouseup', onMouseUp);
     return () => window.removeEventListener('mouseup', onMouseUp);
   }, []);
 
+  /**
+   * Reconcile pending edits whenever server state updates.
+   * If the server already matches a pending value, we remove that pending entry.
+   */
   useEffect(() => {
     if (!currentUser) {
       return;
@@ -1083,6 +395,9 @@ export default function App() {
     });
   }, [currentUser, pendingEdits, state.availability]);
 
+  /**
+   * Initialize host to first known user when no host is set yet.
+   */
   useEffect(() => {
     const settingsRef = getSettingsDocumentRef();
     if (!settingsRef || state.users.length === 0 || state.hostUserId) {
@@ -1092,6 +407,9 @@ export default function App() {
     void setDoc(settingsRef, { hostUserId: state.users[0].id, updatedAt: serverTimestamp() }, { merge: true });
   }, [state.users, state.hostUserId]);
 
+  /**
+   * Returns effective status for rendering: pending edit overrides persisted value.
+   */
   const getStatus = (userId: string, dateKey: string): AvailabilityStatus => {
     const pendingStatus = pendingEdits[userId]?.[dateKey];
     if (pendingStatus) {
@@ -1101,6 +419,9 @@ export default function App() {
     return state.availability[userId]?.[dateKey] ?? 'unspecified';
   };
 
+  /**
+   * Updates local pending edits for one date.
+   */
   const paintDate = (dateKey: string): void => {
     if (!currentUser) {
       return;
@@ -1115,6 +436,7 @@ export default function App() {
       const nextPending = { ...userPending };
 
       if (nextStatus === serverStatus) {
+        // Editing to the server value means there is no local delta to save.
         delete nextPending[dateKey];
       } else {
         nextPending[dateKey] = nextStatus;
@@ -1132,11 +454,17 @@ export default function App() {
     });
   };
 
+  /**
+   * Starts drag painting at the clicked cell.
+   */
   const onStartPaint = (dateKey: string): void => {
     setIsPainting(true);
     paintDate(dateKey);
   };
 
+  /**
+   * Continues drag painting as the cursor enters additional cells.
+   */
   const onPaintWhileDragging = (dateKey: string): void => {
     if (!isPainting) {
       return;
@@ -1145,6 +473,9 @@ export default function App() {
     paintDate(dateKey);
   };
 
+  /**
+   * Persists current user's pending day edits.
+   */
   const onSaveChanges = (): void => {
     if (!currentUser || isSavingChanges) {
       return;
@@ -1191,6 +522,9 @@ export default function App() {
       });
   };
 
+  /**
+   * Completes invite-based app sign-in after Google auth.
+   */
   const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
     const username = normalizeName(usernameInput);
     const inviteCode = normalizeInviteCode(inviteCodeInput);
@@ -1258,7 +592,7 @@ export default function App() {
         inviteRole = inviteRoleValue;
         shouldRedeemInvite = !redeemedByUid;
       } else {
-        // Bootstrap fallback for environments still using static invite codes.
+        // Compatibility path for older deployments still using static invite env vars.
         if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
           inviteRole = 'admin';
         } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
@@ -1330,6 +664,9 @@ export default function App() {
       });
   };
 
+  /**
+   * Starts Google OAuth popup.
+   */
   const onGoogleSignIn = (): void => {
     if (!auth || isGoogleSigningIn) {
       return;
@@ -1350,6 +687,9 @@ export default function App() {
       });
   };
 
+  /**
+   * Creates a new invite document for admin-created onboarding.
+   */
   const onCreateInvite = (role: UserRole): void => {
     if (!currentUser || currentUser.role !== 'admin') {
       return;
@@ -1386,6 +726,9 @@ export default function App() {
       });
   };
 
+  /**
+   * Soft-revokes an invite code by setting `revoked: true`.
+   */
   const onRevokeInvite = (code: string): void => {
     if (!currentUser || currentUser.role !== 'admin') {
       return;
@@ -1409,6 +752,9 @@ export default function App() {
     });
   };
 
+  /**
+   * Changes host user in local state and persists the choice.
+   */
   const onSetHostUserId = (userId: string): void => {
     if (!currentUser || currentUser.role !== 'admin') {
       return;
@@ -1429,6 +775,9 @@ export default function App() {
     });
   };
 
+  /**
+   * Clears local state and signs out from Firebase Auth.
+   */
   const onSignOut = (): void => {
     setState(INITIAL_PERSISTED_STATE);
     setSessionUserId('');
@@ -1450,6 +799,9 @@ export default function App() {
     });
   };
 
+  /**
+   * Guards month updates so invalid values cannot poison date calculations.
+   */
   const onChangeMonth = (nextValue: string): void => {
     setSelectedMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
   };
@@ -1503,6 +855,22 @@ export default function App() {
     );
   }
 
+  const personalAvailabilityPageProps = {
+    currentUser,
+    monthDates,
+    monthValue: selectedMonth,
+    setMonthValue: onChangeMonth,
+    paintStatus: selectedPaintStatus,
+    setPaintStatus: setSelectedPaintStatus,
+    getStatus,
+    onStartPaint,
+    onPaintWhileDragging,
+    onPaintDate: paintDate,
+    hasUnsavedChanges,
+    isSaving: isSavingChanges,
+    onSaveChanges
+  };
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -1527,26 +895,7 @@ export default function App() {
 
       <main>
         <Routes>
-          <Route
-            path="/"
-            element={
-              <PersonalAvailabilityPage
-                currentUser={currentUser}
-                monthDates={monthDates}
-                monthValue={selectedMonth}
-                setMonthValue={onChangeMonth}
-                paintStatus={selectedPaintStatus}
-                setPaintStatus={setSelectedPaintStatus}
-                getStatus={getStatus}
-                onStartPaint={onStartPaint}
-                onPaintWhileDragging={onPaintWhileDragging}
-                onPaintDate={paintDate}
-                hasUnsavedChanges={hasUnsavedChanges}
-                isSaving={isSavingChanges}
-                onSaveChanges={onSaveChanges}
-              />
-            }
-          />
+          <Route path="/" element={<PersonalAvailabilityPage {...personalAvailabilityPageProps} />} />
           <Route
             path="/host"
             element={
@@ -1559,21 +908,7 @@ export default function App() {
                   getStatus={getStatus}
                 />
               ) : (
-                <PersonalAvailabilityPage
-                  currentUser={currentUser}
-                  monthDates={monthDates}
-                  monthValue={selectedMonth}
-                  setMonthValue={onChangeMonth}
-                  paintStatus={selectedPaintStatus}
-                  setPaintStatus={setSelectedPaintStatus}
-                  getStatus={getStatus}
-                  onStartPaint={onStartPaint}
-                  onPaintWhileDragging={onPaintWhileDragging}
-                  onPaintDate={paintDate}
-                  hasUnsavedChanges={hasUnsavedChanges}
-                  isSaving={isSavingChanges}
-                  onSaveChanges={onSaveChanges}
-                />
+                <PersonalAvailabilityPage {...personalAvailabilityPageProps} />
               )
             }
           />
@@ -1595,26 +930,7 @@ export default function App() {
               />
             }
           />
-          <Route
-            path="*"
-            element={
-              <PersonalAvailabilityPage
-                currentUser={currentUser}
-                monthDates={monthDates}
-                monthValue={selectedMonth}
-                setMonthValue={onChangeMonth}
-                paintStatus={selectedPaintStatus}
-                setPaintStatus={setSelectedPaintStatus}
-                getStatus={getStatus}
-                onStartPaint={onStartPaint}
-                onPaintWhileDragging={onPaintWhileDragging}
-                onPaintDate={paintDate}
-                hasUnsavedChanges={hasUnsavedChanges}
-                isSaving={isSavingChanges}
-                onSaveChanges={onSaveChanges}
-              />
-            }
-          />
+          <Route path="*" element={<PersonalAvailabilityPage {...personalAvailabilityPageProps} />} />
         </Routes>
       </main>
     </div>
