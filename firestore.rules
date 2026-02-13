@@ -53,6 +53,48 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /apps/{appNamespace}/campaignInvites/{inviteCode} {
+      allow get: if signedIn();
+      allow list: if signedIn() && isAdmin(appNamespace, request.auth.uid);
+
+      allow create: if signedIn() &&
+        isAdmin(appNamespace, request.auth.uid) &&
+        request.resource.data.keys().hasOnly(['campaignId', 'role', 'createdByUid', 'createdAt', 'revoked', 'redeemedByUid']) &&
+        request.resource.data.campaignId is string &&
+        request.resource.data.campaignId.size() > 0 &&
+        request.resource.data.campaignId == appNamespace &&
+        validUserRole(request.resource.data.role) &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.revoked == false &&
+        request.resource.data.redeemedByUid == '';
+
+      // Admin can revoke invites.
+      allow update: if signedIn() &&
+        isAdmin(appNamespace, request.auth.uid) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['revoked']) &&
+        request.resource.data.revoked == true &&
+        request.resource.data.campaignId == resource.data.campaignId &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.redeemedByUid == resource.data.redeemedByUid;
+
+      // Invite holder can redeem a valid invite once.
+      allow update: if signedIn() &&
+        resource.data.revoked == false &&
+        resource.data.redeemedByUid == '' &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['redeemedByUid']) &&
+        request.resource.data.redeemedByUid == request.auth.uid &&
+        request.resource.data.campaignId == resource.data.campaignId &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.revoked == resource.data.revoked;
+
+      allow delete: if false;
+    }
+
     match /apps/{appNamespace}/availability/{userId} {
       allow read: if signedIn();
       allow create, update: if signedIn() && request.auth.uid == userId;

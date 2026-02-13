@@ -366,6 +366,14 @@ select {
   margin-top: 1rem;
 }
 
+.invite-create-row {
+  margin-top: 0.65rem;
+  display: flex;
+  gap: 0.7rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
 .summary-block h3 {
   margin: 0 0 0.5rem;
 }
