@@ -6,16 +6,6 @@ import type { AvailabilityStatus } from './types';
  */
 
 /**
- * Backward-compatible static member invite code used when invite documents are absent.
- */
-export const LEGACY_MEMBER_INVITE_CODE = import.meta.env.VITE_MEMBER_INVITE_CODE ?? 'party-members';
-
-/**
- * Backward-compatible static admin invite code used when invite documents are absent.
- */
-export const LEGACY_ADMIN_INVITE_CODE = import.meta.env.VITE_ADMIN_INVITE_CODE ?? 'owner-admin';
-
-/**
  * Namespace key used as the campaign/document partition inside Firestore.
  */
 export const APP_NAMESPACE = import.meta.env.VITE_FIREBASE_APP_NAMESPACE ?? 'default';

@@ -4,7 +4,7 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 
 ## Features
 
-- Google sign-in + invite-code onboarding (`member` and `admin` access)
+- Google sign-in + campaign invite-code onboarding
 - Multi-campaign membership with global campaign selector
 - One invite code per campaign, with admin enable/disable controls
 - Dark-mode calendar UI
@@ -64,8 +64,6 @@ Optional:
 - `VITE_FIREBASE_STORAGE_BUCKET`
 - `VITE_FIREBASE_MESSAGING_SENDER_ID`
 - `VITE_FIREBASE_APP_NAMESPACE` (defaults to `default`)
-- `VITE_MEMBER_INVITE_CODE` (defaults to `party-members`)
-- `VITE_ADMIN_INVITE_CODE` (defaults to `owner-admin`)
 
 GitHub Actions secrets expected by `.github/workflows/deploy-firestore-rules.yml`:
 
@@ -92,27 +90,19 @@ firebase login
 firebase deploy --only firestore:rules
 ```
 
-## Invite Code Setup
+## Admin Bootstrap + Invite Codes
 
-Primary flow:
+Initial admin bootstrap (required once per namespace):
+
+- New user profiles are created with role `member` by design.
+- After the first user signs in, promote that user to `admin` out-of-band (Firebase Console or Admin SDK).
+- After an admin exists, use `Campaign Management` in-app to create campaigns and invite codes.
+
+Invite-code flow:
 
 - Admins create campaigns from `Campaign Management` in the app UI.
 - Each campaign gets a single invite code that can be enabled or disabled.
 - Users who sign in with a campaign invite code are added to that campaign.
-
-Bootstrap fallback (optional):
-
-If no Firestore invite exists, the app still accepts these environment codes:
-
-```bash
-VITE_MEMBER_INVITE_CODE=your-member-code
-VITE_ADMIN_INVITE_CODE=your-admin-code
-```
-
-If not set, bootstrap defaults are:
-
-- Member: `party-members`
-- Admin: `owner-admin`
 
 ## Run locally
 

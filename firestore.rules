@@ -5,12 +5,26 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function validUserRole(role) {
-      return role == 'member' || role == 'admin';
-    }
-
     function membershipDocId(campaignId, uid) {
       return campaignId + '_' + uid;
+    }
+
+    function userDocPath(appNamespace, uid) {
+      return /databases/$(database)/documents/apps/$(appNamespace)/users/$(uid);
+    }
+
+    function hasUserProfile(appNamespace, uid) {
+      return signedIn() &&
+        exists(userDocPath(appNamespace, uid));
+    }
+
+    function hasRole(appNamespace, uid, role) {
+      return hasUserProfile(appNamespace, uid) &&
+        get(userDocPath(appNamespace, uid)).data.role == role;
+    }
+
+    function isAdmin(appNamespace, uid) {
+      return hasRole(appNamespace, uid, 'admin');
     }
 
     function isCampaignMember(appNamespace, campaignId, uid) {
@@ -18,31 +32,43 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(campaignId, uid)));
     }
 
-    function isAdmin(appNamespace, uid) {
-      return signedIn() &&
-        exists(/databases/$(database)/documents/apps/$(appNamespace)/users/$(uid)) &&
-        get(/databases/$(database)/documents/apps/$(appNamespace)/users/$(uid)).data.role == 'admin';
+    function hasValidAvailabilityPayload() {
+      return request.resource.data.days is map &&
+        request.resource.data.days.keys().size() <= 366 &&
+        request.resource.data.days.values().hasOnly(['unspecified', 'available', 'maybe', 'unavailable']);
     }
 
     match /apps/{appNamespace}/users/{userId} {
-      allow read: if signedIn();
+      allow get: if signedIn() &&
+        (
+          request.auth.uid == userId ||
+          isAdmin(appNamespace, request.auth.uid)
+        );
+
+      allow list: if signedIn() && isAdmin(appNamespace, request.auth.uid);
 
       allow create: if signedIn() &&
         request.auth.uid == userId &&
         request.resource.data.keys().hasOnly(['name', 'email', 'role', 'createdAt', 'lastSeenAt']) &&
         request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 120 &&
         request.resource.data.email is string &&
         request.resource.data.email.size() > 0 &&
+        request.resource.data.email.size() <= 320 &&
+        request.resource.data.role == 'member' &&
         request.resource.data.lastSeenAt is timestamp &&
-        request.resource.data.createdAt is timestamp &&
-        validUserRole(request.resource.data.role);
+        request.resource.data.createdAt is timestamp;
 
       allow update: if signedIn() &&
         request.auth.uid == userId &&
         request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'lastSeenAt']) &&
         request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 120 &&
         request.resource.data.email is string &&
         request.resource.data.email.size() > 0 &&
+        request.resource.data.email.size() <= 320 &&
         request.resource.data.lastSeenAt is timestamp &&
         request.resource.data.role == resource.data.role &&
         request.resource.data.createdAt == resource.data.createdAt;
@@ -59,8 +85,10 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly(['name', 'inviteCode', 'inviteEnabled', 'createdByUid', 'createdAt', 'updatedAt']) &&
         request.resource.data.name is string &&
         request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 64 &&
         request.resource.data.inviteCode is string &&
-        request.resource.data.inviteCode.size() > 0 &&
+        request.resource.data.inviteCode.size() >= 8 &&
+        request.resource.data.inviteCode.size() <= 32 &&
         request.resource.data.inviteEnabled == true &&
         request.resource.data.createdByUid == request.auth.uid &&
         request.resource.data.createdAt is timestamp &&
@@ -85,6 +113,8 @@ service cloud.firestore {
 
       allow create: if signedIn() &&
         isAdmin(appNamespace, request.auth.uid) &&
+        inviteCode.size() >= 8 &&
+        inviteCode.size() <= 32 &&
         request.resource.data.keys().hasOnly(['campaignId', 'enabled', 'createdByUid', 'createdAt', 'updatedAt']) &&
         request.resource.data.campaignId is string &&
         request.resource.data.campaignId.size() > 0 &&
@@ -114,6 +144,7 @@ service cloud.firestore {
         );
 
       allow create: if signedIn() &&
+        hasUserProfile(appNamespace, request.auth.uid) &&
         request.resource.data.keys().hasOnly(['campaignId', 'uid', 'name', 'email', 'joinedAt', 'lastSeenAt']) &&
         request.resource.data.campaignId is string &&
         request.resource.data.campaignId.size() > 0 &&
@@ -121,8 +152,12 @@ service cloud.firestore {
         membershipId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
         request.resource.data.name is string &&
         request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 120 &&
         request.resource.data.email is string &&
         request.resource.data.email.size() > 0 &&
+        request.resource.data.email.size() <= 320 &&
+        request.resource.data.name == get(userDocPath(appNamespace, request.auth.uid)).data.name &&
+        request.resource.data.email == get(userDocPath(appNamespace, request.auth.uid)).data.email &&
         request.resource.data.joinedAt is timestamp &&
         request.resource.data.lastSeenAt is timestamp &&
         (
@@ -134,16 +169,21 @@ service cloud.firestore {
         );
 
       allow update: if signedIn() &&
+        hasUserProfile(appNamespace, request.auth.uid) &&
         request.auth.uid == resource.data.uid &&
         membershipId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'joinedAt', 'lastSeenAt']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'lastSeenAt']) &&
         request.resource.data.campaignId == resource.data.campaignId &&
         request.resource.data.uid == resource.data.uid &&
+        request.resource.data.joinedAt == resource.data.joinedAt &&
         request.resource.data.name is string &&
         request.resource.data.name.size() > 0 &&
+        request.resource.data.name.size() <= 120 &&
         request.resource.data.email is string &&
         request.resource.data.email.size() > 0 &&
-        request.resource.data.joinedAt is timestamp &&
+        request.resource.data.email.size() <= 320 &&
+        request.resource.data.name == get(userDocPath(appNamespace, request.auth.uid)).data.name &&
+        request.resource.data.email == get(userDocPath(appNamespace, request.auth.uid)).data.email &&
         request.resource.data.lastSeenAt is timestamp;
 
       allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
@@ -157,14 +197,24 @@ service cloud.firestore {
           isCampaignMember(appNamespace, resource.data.campaignId, request.auth.uid)
         );
 
-      allow create, update: if signedIn() &&
+      allow create: if signedIn() &&
         request.resource.data.keys().hasOnly(['campaignId', 'uid', 'days', 'updatedAt']) &&
         request.resource.data.campaignId is string &&
         request.resource.data.campaignId.size() > 0 &&
         request.resource.data.uid == request.auth.uid &&
         entryId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
         exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(request.resource.data.campaignId, request.auth.uid))) &&
-        request.resource.data.days is map &&
+        hasValidAvailabilityPayload() &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow update: if signedIn() &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'days', 'updatedAt']) &&
+        request.resource.data.campaignId == resource.data.campaignId &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.uid == request.auth.uid &&
+        entryId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
+        exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(resource.data.campaignId, request.auth.uid))) &&
+        hasValidAvailabilityPayload() &&
         request.resource.data.updatedAt is timestamp;
 
       allow delete: if signedIn() &&
@@ -179,6 +229,11 @@ service cloud.firestore {
         isAdmin(appNamespace, request.auth.uid) &&
         request.resource.data.keys().hasOnly(['hostUserId', 'updatedAt']) &&
         request.resource.data.hostUserId is string &&
+        request.resource.data.hostUserId.size() <= 128 &&
+        (
+          request.resource.data.hostUserId == '' ||
+          exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(campaignId, request.resource.data.hostUserId)))
+        ) &&
         request.resource.data.updatedAt is timestamp;
 
       allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
