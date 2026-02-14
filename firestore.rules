@@ -76,7 +76,7 @@ service cloud.firestore {
         request.resource.data.createdByUid == resource.data.createdByUid &&
         request.resource.data.createdAt == resource.data.createdAt;
 
-      allow delete: if false;
+      allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
     }
 
     match /apps/{appNamespace}/campaignInvites/{inviteCode} {
@@ -102,7 +102,7 @@ service cloud.firestore {
         request.resource.data.createdByUid == resource.data.createdByUid &&
         request.resource.data.createdAt == resource.data.createdAt;
 
-      allow delete: if false;
+      allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
     }
 
     match /apps/{appNamespace}/memberships/{membershipId} {
@@ -181,7 +181,7 @@ service cloud.firestore {
         request.resource.data.hostUserId is string &&
         request.resource.data.updatedAt is timestamp;
 
-      allow delete: if false;
+      allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
     }
   }
 }

@@ -43,6 +43,8 @@ export function SignInPage({
   onSignIn,
   error
 }: SignInPageProps) {
+  const privacyPolicyUrl = `${import.meta.env.BASE_URL}privacy-policy.html`;
+
   // Local form state is intentionally isolated to this view.
   const [username, setUsername] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -101,6 +103,13 @@ export function SignInPage({
       )}
 
       {error ? <p className="form-error">{error}</p> : null}
+      <p className="legal-note">
+        By continuing, you agree to this app&apos;s{' '}
+        <a href={privacyPolicyUrl} target="_blank" rel="noreferrer">
+          Privacy Policy
+        </a>
+        .
+      </p>
     </section>
   );
 }

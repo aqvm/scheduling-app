@@ -8,7 +8,18 @@ import {
   signOut,
   type User
 } from 'firebase/auth';
-import { doc, limit, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import {
+  doc,
+  getDocs,
+  limit,
+  onSnapshot,
+  query,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  where,
+  writeBatch
+} from 'firebase/firestore';
 import { auth, db, firebaseConfigError } from './firebase';
 import { AdminManagementPage } from './features/admin/AdminManagementPage';
 import { SignInPage } from './features/auth/SignInPage';
@@ -107,6 +118,7 @@ export default function App() {
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
   const [isUpdatingInvite, setIsUpdatingInvite] = useState(false);
+  const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const [removingUserId, setRemovingUserId] = useState('');
   const [signInError, setSignInError] = useState('');
   const [appError, setAppError] = useState('');
@@ -136,7 +148,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAuthUserId(user.uid);
-        setSessionUserId('');
+        setSessionUserId((currentSessionUserId) =>
+          currentSessionUserId && currentSessionUserId !== user.uid ? '' : currentSessionUserId
+        );
         setAuthReady(true);
         return;
       }
@@ -633,6 +647,7 @@ export default function App() {
     const username = normalizeName(usernameInput);
     const inviteCode = normalizeInviteCode(inviteCodeInput);
     const authUser = auth?.currentUser ?? null;
+    const signedInUserId = authUser?.uid ?? authUserId;
     const signedInEmail = getSignedInEmail(authUser);
 
     if (!username) {
@@ -640,7 +655,7 @@ export default function App() {
       return;
     }
 
-    if (!authUserId) {
+    if (!signedInUserId) {
       setSignInError('Sign in with Google first.');
       return;
     }
@@ -671,7 +686,7 @@ export default function App() {
       return;
     }
 
-    const userDocRef = doc(usersRef, authUserId);
+    const userDocRef = doc(usersRef, signedInUserId);
 
     setSignInError('');
 
@@ -696,7 +711,7 @@ export default function App() {
 
           const membershipDocRef = doc(
             membershipsRef,
-            membershipDocumentId(campaignId, authUserId)
+            membershipDocumentId(campaignId, signedInUserId)
           );
           const membershipSnapshot = await transaction.get(membershipDocRef);
 
@@ -709,7 +724,7 @@ export default function App() {
             membershipDocRef,
             {
               campaignId,
-              uid: authUserId,
+              uid: signedInUserId,
               name: username,
               email: signedInEmail,
               joinedAt: serverTimestamp(),
@@ -728,7 +743,7 @@ export default function App() {
           if (!hostForCampaign) {
             transaction.set(
               campaignSettingsDocRef,
-              { hostUserId: authUserId, updatedAt: serverTimestamp() },
+              { hostUserId: signedInUserId, updatedAt: serverTimestamp() },
               { merge: true }
             );
           }
@@ -778,7 +793,7 @@ export default function App() {
       return inviteCampaignId;
     })
       .then((inviteCampaignId) => {
-        setSessionUserId(authUserId);
+        setSessionUserId(signedInUserId);
         if (inviteCampaignId) {
           setSelectedCampaignId(inviteCampaignId);
         }
@@ -945,6 +960,7 @@ export default function App() {
       setManagementError('Firebase is not configured.');
       return;
     }
+    const firestore = db;
 
     const campaignsRef = getCampaignsCollectionRef();
     const invitesRef = getCampaignInvitesCollectionRef();
@@ -997,6 +1013,70 @@ export default function App() {
       })
       .finally(() => {
         setIsUpdatingInvite(false);
+      });
+  };
+
+  const onDeleteCampaign = (): void => {
+    if (!currentUser || currentUser.role !== 'admin' || !selectedCampaign || isDeletingCampaign) {
+      return;
+    }
+
+    if (!db) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+    const firestore = db;
+
+    const campaignsRef = getCampaignsCollectionRef();
+    const invitesRef = getCampaignInvitesCollectionRef();
+    const membershipsRef = getMembershipsCollectionRef();
+    const availabilityRef = getAvailabilityCollectionRef();
+    const campaignToDelete = selectedCampaign;
+    const settingsDocRef = getCampaignSettingsDocumentRef(campaignToDelete.id);
+    if (!campaignsRef || !invitesRef || !membershipsRef || !availabilityRef || !settingsDocRef) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+
+    setManagementError('');
+    setIsDeletingCampaign(true);
+
+    const campaignDocRef = doc(campaignsRef, campaignToDelete.id);
+    const inviteDocRef = doc(invitesRef, campaignToDelete.inviteCode);
+    const membershipsQuery = query(membershipsRef, where('campaignId', '==', campaignToDelete.id));
+    const availabilityQuery = query(availabilityRef, where('campaignId', '==', campaignToDelete.id));
+
+    void Promise.all([getDocs(membershipsQuery), getDocs(availabilityQuery)])
+      .then(async ([membershipsSnapshot, availabilitySnapshot]) => {
+        const docsToDelete = [
+          campaignDocRef,
+          inviteDocRef,
+          settingsDocRef,
+          ...membershipsSnapshot.docs.map((membershipDoc) => membershipDoc.ref),
+          ...availabilitySnapshot.docs.map((availabilityDoc) => availabilityDoc.ref)
+        ];
+
+        // Keep each commit under Firestore per-batch operation limits.
+        const BATCH_DELETE_SIZE = 450;
+        for (let index = 0; index < docsToDelete.length; index += BATCH_DELETE_SIZE) {
+          const deleteBatch = writeBatch(firestore);
+          const docsInBatch = docsToDelete.slice(index, index + BATCH_DELETE_SIZE);
+          docsInBatch.forEach((docRef) => {
+            deleteBatch.delete(docRef);
+          });
+          await deleteBatch.commit();
+        }
+      })
+      .then(() => {
+        if (selectedCampaignId === campaignToDelete.id) {
+          setSelectedCampaignId('');
+        }
+      })
+      .catch((error: unknown) => {
+        setManagementError(formatFirebaseError(error, 'Unable to delete campaign.'));
+      })
+      .finally(() => {
+        setIsDeletingCampaign(false);
       });
   };
 
@@ -1266,9 +1346,11 @@ export default function App() {
                 managementError={managementError}
                 isCreatingCampaign={isCreatingCampaign}
                 isUpdatingInvite={isUpdatingInvite}
+                isDeletingCampaign={isDeletingCampaign}
                 removingUserId={removingUserId}
                 onCreateCampaign={onCreateCampaign}
                 onSetInviteEnabled={onSetInviteEnabled}
+                onDeleteCampaign={onDeleteCampaign}
                 onKickUser={onKickUser}
               />
             }

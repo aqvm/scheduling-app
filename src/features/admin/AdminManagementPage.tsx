@@ -13,9 +13,11 @@ type AdminManagementPageProps = {
   managementError: string;
   isCreatingCampaign: boolean;
   isUpdatingInvite: boolean;
+  isDeletingCampaign: boolean;
   removingUserId: string;
   onCreateCampaign: (campaignName: string) => void;
   onSetInviteEnabled: (enabled: boolean) => void;
+  onDeleteCampaign: () => void;
   onKickUser: (userId: string) => void;
 };
 
@@ -35,9 +37,11 @@ export function AdminManagementPage({
   managementError,
   isCreatingCampaign,
   isUpdatingInvite,
+  isDeletingCampaign,
   removingUserId,
   onCreateCampaign,
   onSetInviteEnabled,
+  onDeleteCampaign,
   onKickUser
 }: AdminManagementPageProps) {
   const [campaignName, setCampaignName] = useState('');
@@ -101,14 +105,31 @@ export function AdminManagementPage({
                 </small>
                 <small>{selectedCampaign.inviteEnabled ? 'Invite Active' : 'Invite Disabled'}</small>
               </span>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={isUpdatingInvite}
-                onClick={() => onSetInviteEnabled(!selectedCampaign.inviteEnabled)}
-              >
-                {selectedCampaign.inviteEnabled ? 'Disable Invite' : 'Enable Invite'}
-              </button>
+              <div className="admin-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={isUpdatingInvite || isDeletingCampaign}
+                  onClick={() => onSetInviteEnabled(!selectedCampaign.inviteEnabled)}
+                >
+                  {selectedCampaign.inviteEnabled ? 'Disable Invite' : 'Enable Invite'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button danger-button"
+                  disabled={isDeletingCampaign || isUpdatingInvite}
+                  onClick={() => {
+                    const isConfirmed = window.confirm(
+                      `Delete "${selectedCampaign.name}" and all campaign data? This cannot be undone.`
+                    );
+                    if (isConfirmed) {
+                      onDeleteCampaign();
+                    }
+                  }}
+                >
+                  {isDeletingCampaign ? 'Deleting...' : 'Delete Campaign'}
+                </button>
+              </div>
             </div>
           </div>
         )}
