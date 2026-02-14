@@ -48,6 +48,16 @@ service cloud.firestore {
         alias.size() <= 64;
     }
 
+    function hasImmutableMembershipAlias(existingData, nextData) {
+      return (
+        existingData.alias is string &&
+        existingData.alias.size() > 0 &&
+        existingData.alias.size() <= 64
+      )
+        ? nextData.alias == existingData.alias
+        : hasValidAlias(nextData.alias);
+    }
+
     match /apps/{appNamespace}/users/{userId} {
       allow get: if signedIn() &&
         (
@@ -68,7 +78,7 @@ service cloud.firestore {
       allow update: if signedIn() &&
         request.auth.uid == userId &&
         request.resource.data.keys().hasOnly(['alias', 'role', 'createdAt', 'lastSeenAt']) &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt', 'name', 'email']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt']) &&
         hasValidAlias(request.resource.data.alias) &&
         request.resource.data.lastSeenAt is timestamp &&
         request.resource.data.role == resource.data.role &&
@@ -168,7 +178,6 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         membershipId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
         hasValidAlias(request.resource.data.alias) &&
-        request.resource.data.alias == getAfter(userDocPath(appNamespace, request.auth.uid)).data.alias &&
         request.resource.data.joinedAt is timestamp &&
         request.resource.data.lastSeenAt is timestamp &&
         (
@@ -184,12 +193,11 @@ service cloud.firestore {
         request.auth.uid == resource.data.uid &&
         request.resource.data.keys().hasOnly(['campaignId', 'uid', 'alias', 'joinedAt', 'lastSeenAt']) &&
         membershipId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt', 'name', 'email']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt']) &&
         request.resource.data.campaignId == resource.data.campaignId &&
         request.resource.data.uid == resource.data.uid &&
         request.resource.data.joinedAt == resource.data.joinedAt &&
-        hasValidAlias(request.resource.data.alias) &&
-        request.resource.data.alias == get(userDocPath(appNamespace, request.auth.uid)).data.alias &&
+        hasImmutableMembershipAlias(resource.data, request.resource.data) &&
         request.resource.data.lastSeenAt is timestamp;
 
       allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
