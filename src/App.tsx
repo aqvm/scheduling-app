@@ -113,7 +113,7 @@ export default function App() {
   const [isUpdatingInvite, setIsUpdatingInvite] = useState(false);
   const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const [removingUserId, setRemovingUserId] = useState('');
-  const [signInDisplayName, setSignInDisplayName] = useState('');
+  const [joinDisplayNameInput, setJoinDisplayNameInput] = useState('');
   const [joinInviteCode, setJoinInviteCode] = useState('');
   const [isJoiningCampaign, setIsJoiningCampaign] = useState(false);
   const [signInError, setSignInError] = useState('');
@@ -122,6 +122,16 @@ export default function App() {
 
   const currentUser =
     userProfile !== null && authUserId.length > 0 && userProfile.id === authUserId ? userProfile : null;
+  const selectedMembershipAlias =
+    currentUser && selectedCampaignId
+      ? memberships.find(
+          (membership) =>
+            membership.campaignId === selectedCampaignId &&
+            membership.userId === currentUser.id
+        )?.alias ?? ''
+      : '';
+  const displayAlias = selectedMembershipAlias || currentUser?.alias || '';
+  const displayUser = currentUser ? { ...currentUser, alias: displayAlias } : null;
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null;
   const hostUser = campaignUsers.find((user) => user.id === hostUserId) ?? null;
   const canViewHostSummary =
@@ -642,7 +652,7 @@ export default function App() {
     const inviteCode = normalizeInviteCode(inviteCodeInput);
     const authUser = auth?.currentUser ?? null;
     const signedInUserId = authUser?.uid ?? authUserId;
-    const requestedAlias = normalizeName(signInDisplayName);
+    const requestedAlias = normalizeName(joinDisplayNameInput);
 
     if (!signedInUserId) {
       setSignInError('Sign in with Google first.');
@@ -656,11 +666,6 @@ export default function App() {
 
     if (requestedAlias.length > 64) {
       setSignInError('Display name must be 64 characters or fewer.');
-      return;
-    }
-
-    if (!currentUser && !requestedAlias) {
-      setSignInError('Enter your display name before joining your first campaign.');
       return;
     }
 
@@ -707,20 +712,6 @@ export default function App() {
         throw new Error('Invite code is misconfigured.');
       }
 
-      const existingAlias =
-        userSnapshot.exists() && typeof userSnapshot.data().alias === 'string'
-          ? normalizeName(userSnapshot.data().alias)
-          : '';
-      const effectiveAlias = existingAlias || requestedAlias || createUserAlias(signedInUserId);
-
-      if (!effectiveAlias) {
-        throw new Error('Display name is required for first-time setup.');
-      }
-
-      if (effectiveAlias.length > 64) {
-        throw new Error('Display name must be 64 characters or fewer.');
-      }
-
       const membershipDocRef = doc(
         membershipsRef,
         membershipDocumentId(campaignId, signedInUserId)
@@ -728,8 +719,30 @@ export default function App() {
       const membershipSnapshot = await transaction.get(membershipDocRef);
       const hasExistingMembership = membershipSnapshot.exists();
 
+      const existingMembershipAlias =
+        hasExistingMembership && typeof membershipSnapshot.data().alias === 'string'
+          ? normalizeName(membershipSnapshot.data().alias)
+          : '';
+
       if (!enabled && !hasExistingMembership) {
         throw new Error('This invite code is disabled.');
+      }
+
+      const existingUserAlias =
+        userSnapshot.exists() && typeof userSnapshot.data().alias === 'string'
+          ? normalizeName(userSnapshot.data().alias)
+          : '';
+      const fallbackUserAlias = existingUserAlias || createUserAlias(signedInUserId);
+      const effectiveMembershipAlias = hasExistingMembership
+        ? existingMembershipAlias || fallbackUserAlias
+        : requestedAlias;
+
+      if (!effectiveMembershipAlias) {
+        throw new Error(
+          hasExistingMembership
+            ? 'Membership display name is invalid.'
+            : 'Enter a display name before joining this campaign.'
+        );
       }
 
       const existingJoinedAt = hasExistingMembership ? membershipSnapshot.data().joinedAt : null;
@@ -744,7 +757,7 @@ export default function App() {
         {
           campaignId,
           uid: signedInUserId,
-          alias: effectiveAlias,
+          alias: effectiveMembershipAlias,
           joinedAt: hasExistingMembership ? existingJoinedAt : serverTimestamp(),
           lastSeenAt: serverTimestamp()
         }
@@ -764,7 +777,7 @@ export default function App() {
         transaction.set(
           userDocRef,
           {
-            alias: effectiveAlias,
+            alias: fallbackUserAlias,
             role: existingRole,
             createdAt: existingCreatedAt,
             lastSeenAt: serverTimestamp()
@@ -774,7 +787,7 @@ export default function App() {
         transaction.set(
           userDocRef,
           {
-            alias: effectiveAlias,
+            alias: fallbackUserAlias,
             role: 'member',
             createdAt: serverTimestamp(),
             lastSeenAt: serverTimestamp()
@@ -789,6 +802,7 @@ export default function App() {
           setSelectedCampaignId(inviteCampaignId);
         }
 
+        setJoinDisplayNameInput('');
         setJoinInviteCode('');
         setSignInError('');
         setAppError('');
@@ -804,17 +818,6 @@ export default function App() {
   const onGoogleSignIn = (): void => {
     const firebaseAuth = auth;
     if (!firebaseAuth || isGoogleSigningIn) {
-      return;
-    }
-
-    const displayName = normalizeName(signInDisplayName);
-    if (!displayName) {
-      setSignInError('Enter your display name before continuing with Google.');
-      return;
-    }
-
-    if (displayName.length > 64) {
-      setSignInError('Display name must be 64 characters or fewer.');
       return;
     }
 
@@ -1169,7 +1172,7 @@ export default function App() {
     setCampaignUsers([]);
     setCampaignAvailability({});
     setHostUserId('');
-    setSignInDisplayName('');
+    setJoinDisplayNameInput('');
     setJoinInviteCode('');
     setIsJoiningCampaign(false);
     setManagementError('');
@@ -1229,13 +1232,6 @@ export default function App() {
         </header>
         <main>
           <SignInPage
-            displayName={signInDisplayName}
-            setDisplayName={(value) => {
-              setSignInDisplayName(value);
-              if (signInError) {
-                setSignInError('');
-              }
-            }}
             onGoogleSignIn={onGoogleSignIn}
             isGoogleSigningIn={isGoogleSigningIn}
             error={signInError}
@@ -1244,8 +1240,6 @@ export default function App() {
       </div>
     );
   }
-
-  const signedInName = normalizeName(signInDisplayName) || createUserAlias(authUserId);
 
   const campaignSelectionControl = (
     <label className="month-picker" htmlFor="campaign-select">
@@ -1277,26 +1271,24 @@ export default function App() {
         onJoinCampaign(joinInviteCode);
       }}
     >
-      {!currentUser ? (
-        <label className="month-picker" htmlFor="join-display-name-input">
-          Display Name
-          <input
-            id="join-display-name-input"
-            type="text"
-            value={signInDisplayName}
-            onChange={(event) => {
-              setSignInDisplayName(event.target.value);
-              if (signInError) {
-                setSignInError('');
-              }
-            }}
-            autoComplete="nickname"
-            spellCheck={false}
-            placeholder="Your display name"
-            maxLength={64}
-          />
-        </label>
-      ) : null}
+      <label className="month-picker" htmlFor="join-display-name-input">
+        Display Name
+        <input
+          id="join-display-name-input"
+          type="text"
+          value={joinDisplayNameInput}
+          onChange={(event) => {
+            setJoinDisplayNameInput(event.target.value);
+            if (signInError) {
+              setSignInError('');
+            }
+          }}
+          autoComplete="nickname"
+          spellCheck={false}
+          placeholder={selectedMembershipAlias || 'Name for this campaign'}
+          maxLength={64}
+        />
+      </label>
       <label className="month-picker" htmlFor="join-campaign-code-input">
         Join Campaign
         <input
@@ -1326,7 +1318,7 @@ export default function App() {
       <div className="app-shell">
         <header className="app-header">
           <h1>DnD Group Scheduler</h1>
-          <p>Signed in as <strong>{signedInName}</strong>. Join a campaign to continue.</p>
+          <p>Signed in with Google. Join a campaign to continue.</p>
           <div className="header-controls">
             {campaignSelectionControl}
             {joinCampaignControl}
@@ -1348,7 +1340,7 @@ export default function App() {
   }
 
   const personalAvailabilityPageProps = {
-    currentUser,
+    currentUser: displayUser ?? currentUser,
     monthDates,
     monthValue: selectedMonth,
     setMonthValue: onChangeMonth,
@@ -1378,7 +1370,7 @@ export default function App() {
       <header className="app-header">
         <h1>DnD Group Scheduler</h1>
         <p>
-          Signed in as <strong>{currentUser.alias}</strong> ({currentUser.role}). Campaign:{' '}
+          Signed in as <strong>{displayAlias || currentUser.alias}</strong> ({currentUser.role}). Campaign:{' '}
           <strong>{selectedCampaign?.name ?? 'None selected'}</strong>. Host:{' '}
           <strong>{hostUser?.alias ?? 'Not set'}</strong>
         </p>
@@ -1419,7 +1411,7 @@ export default function App() {
               canViewHostSummary && selectedCampaign ? (
                 <HostSummaryPage
                   users={campaignUsers}
-                  currentUser={currentUser}
+                  currentUser={displayUser ?? currentUser}
                   hostUserId={hostUserId}
                   monthDateKeys={monthDateKeys}
                   getStatus={getStatus}
@@ -1435,7 +1427,7 @@ export default function App() {
             path="/admin"
             element={
               <AdminManagementPage
-                currentUser={currentUser}
+                currentUser={displayUser ?? currentUser}
                 selectedCampaign={selectedCampaign}
                 users={campaignUsers}
                 hostUserId={hostUserId}
