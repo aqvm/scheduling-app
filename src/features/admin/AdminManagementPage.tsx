@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Campaign, UserProfile } from '../../shared/scheduler/types';
 
 /**
@@ -45,6 +45,36 @@ export function AdminManagementPage({
   onKickUser
 }: AdminManagementPageProps) {
   const [campaignName, setCampaignName] = useState('');
+  const [inviteCopyState, setInviteCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  useEffect(() => {
+    setInviteCopyState('idle');
+  }, [selectedCampaign?.id, selectedCampaign?.inviteCode]);
+
+  const onCopyInviteCode = async (inviteCode: string): Promise<void> => {
+    const normalizedInviteCode = inviteCode.toUpperCase();
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedInviteCode);
+        setInviteCopyState('copied');
+        return;
+      }
+
+      const fallbackTextarea = document.createElement('textarea');
+      fallbackTextarea.value = normalizedInviteCode;
+      fallbackTextarea.setAttribute('readonly', '');
+      fallbackTextarea.style.position = 'absolute';
+      fallbackTextarea.style.left = '-9999px';
+      document.body.appendChild(fallbackTextarea);
+      fallbackTextarea.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(fallbackTextarea);
+      setInviteCopyState(copied ? 'copied' : 'failed');
+    } catch {
+      setInviteCopyState('failed');
+    }
+  };
 
   if (currentUser.role !== 'admin') {
     return (
@@ -100,9 +130,22 @@ export function AdminManagementPage({
             <div className="admin-row">
               <span>
                 <strong>{selectedCampaign.name}</strong>
-                <small>
-                  Invite code: <code>{selectedCampaign.inviteCode.toUpperCase()}</code>
-                </small>
+                <div className="invite-code-row">
+                  <small>
+                    Invite code: <code>{selectedCampaign.inviteCode.toUpperCase()}</code>
+                  </small>
+                  <button
+                    type="button"
+                    className="ghost-button copy-code-button"
+                    onClick={() => onCopyInviteCode(selectedCampaign.inviteCode)}
+                  >
+                    {inviteCopyState === 'copied'
+                      ? 'Copied'
+                      : inviteCopyState === 'failed'
+                        ? 'Retry Copy'
+                        : 'Copy'}
+                  </button>
+                </div>
                 <small>{selectedCampaign.inviteEnabled ? 'Invite Active' : 'Invite Disabled'}</small>
               </span>
               <div className="admin-actions">

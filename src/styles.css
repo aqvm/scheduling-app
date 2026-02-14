@@ -547,11 +547,26 @@ th {
   gap: 0.2rem;
 }
 
+.invite-code-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
 .admin-row small {
   color: #93a8be;
   text-transform: uppercase;
   letter-spacing: 0.03em;
   font-size: 0.72rem;
+}
+
+.copy-code-button {
+  padding: 0.16rem 0.5rem;
+  border-radius: 0.42rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .admin-actions {
