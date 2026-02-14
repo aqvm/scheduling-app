@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import {
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  type User
+} from 'firebase/auth';
 import { doc, limit, onSnapshot, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { auth, db, firebaseConfigError } from './firebase';
 import { AdminManagementPage } from './features/admin/AdminManagementPage';
@@ -30,9 +37,51 @@ import {
 import { isAvailabilityStatus, isUserRole, normalizeInviteCode, normalizeName } from './shared/scheduler/validation';
 
 const MAX_INVITE_CREATE_ATTEMPTS = 6;
+const POPUP_REDIRECT_FALLBACK_ERRORS = new Set([
+  'auth/cancelled-popup-request',
+  'auth/popup-blocked',
+  'auth/popup-closed-by-user'
+]);
 
 function membershipDocumentId(campaignId: string, userId: string): string {
   return `${campaignId}_${userId}`;
+}
+
+function getErrorCode(error: unknown): string {
+  if (!error || typeof error !== 'object') {
+    return '';
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : '';
+}
+
+function formatFirebaseError(error: unknown, fallbackMessage: string): string {
+  if (error instanceof Error) {
+    const code = getErrorCode(error);
+    return code ? `${error.message} (${code})` : error.message;
+  }
+
+  const code = getErrorCode(error);
+  return code ? `${fallbackMessage} (${code})` : fallbackMessage;
+}
+
+function isSignedInWithGoogle(user: User | null): boolean {
+  if (!user) {
+    return false;
+  }
+
+  return user.providerData.some((provider) => provider.providerId === 'google.com');
+}
+
+function getSignedInEmail(user: User | null): string {
+  const directEmail = user?.email?.trim().toLowerCase() ?? '';
+  if (directEmail) {
+    return directEmail;
+  }
+
+  const googleProvider = user?.providerData.find((provider) => provider.providerId === 'google.com');
+  return googleProvider?.email?.trim().toLowerCase() ?? '';
 }
 
 export default function App() {
@@ -583,7 +632,8 @@ export default function App() {
   const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
     const username = normalizeName(usernameInput);
     const inviteCode = normalizeInviteCode(inviteCodeInput);
-    const signedInEmail = auth?.currentUser?.email?.trim().toLowerCase() ?? '';
+    const authUser = auth?.currentUser ?? null;
+    const signedInEmail = getSignedInEmail(authUser);
 
     if (!username) {
       setSignInError('Username is required.');
@@ -595,8 +645,15 @@ export default function App() {
       return;
     }
 
+    if (!isSignedInWithGoogle(authUser)) {
+      setSignInError('Google sign-in session is missing. Please continue with Google again.');
+      return;
+    }
+
     if (!signedInEmail) {
-      setSignInError('Unable to confirm your Google account email.');
+      setSignInError(
+        'Unable to confirm your Google account email. Try a Google account with an available email address.'
+      );
       return;
     }
 
@@ -728,19 +785,15 @@ export default function App() {
 
         setSignInError('');
         setAppError('');
-      })
+    })
       .catch((error: unknown) => {
-        if (error instanceof Error) {
-          setSignInError(error.message);
-          return;
-        }
-
-        setSignInError('Unable to sign in at this time.');
+        setSignInError(formatFirebaseError(error, 'Unable to sign in at this time.'));
       });
   };
 
   const onGoogleSignIn = (): void => {
-    if (!auth || isGoogleSigningIn) {
+    const firebaseAuth = auth;
+    if (!firebaseAuth || isGoogleSigningIn) {
       return;
     }
 
@@ -750,9 +803,18 @@ export default function App() {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
 
-    void signInWithPopup(auth, provider)
-      .catch(() => {
-        setSignInError('Unable to sign in with Google right now.');
+    void signInWithPopup(firebaseAuth, provider)
+      .catch((error: unknown) => {
+        const errorCode = getErrorCode(error);
+        if (POPUP_REDIRECT_FALLBACK_ERRORS.has(errorCode)) {
+          setSignInError('Popup sign-in failed. Trying redirect sign-in...');
+
+          return signInWithRedirect(firebaseAuth, provider).catch((redirectError: unknown) => {
+            setSignInError(formatFirebaseError(redirectError, 'Unable to sign in with Google right now.'));
+          });
+        }
+
+        setSignInError(formatFirebaseError(error, 'Unable to sign in with Google right now.'));
       })
       .finally(() => {
         setIsGoogleSigningIn(false);
