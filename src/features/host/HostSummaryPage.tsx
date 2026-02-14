@@ -175,7 +175,7 @@ export function HostSummaryPage({
                   <th>Date</th>
                   <th>Score</th>
                   {users.map((user) => (
-                    <th key={user.id}>{user.name}</th>
+                    <th key={user.id}>{user.alias}</th>
                   ))}
                 </tr>
               </thead>

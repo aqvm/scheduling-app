@@ -83,20 +83,10 @@ function isSignedInWithGoogle(user: User | null): boolean {
   return user.providerData.some((provider) => provider.providerId === 'google.com');
 }
 
-function getSignedInEmail(user: User | null): string {
-  const directEmail = user?.email?.trim().toLowerCase() ?? '';
-  if (directEmail) {
-    return directEmail;
-  }
-
-  const googleProvider = user?.providerData.find((provider) => provider.providerId === 'google.com');
-  return googleProvider?.email?.trim().toLowerCase() ?? '';
-}
-
-function getUsernameFromEmail(email: string): string {
-  const atIndex = email.indexOf('@');
-  const localPart = atIndex >= 0 ? email.slice(0, atIndex) : email;
-  return normalizeName(localPart);
+function createUserAlias(userId: string): string {
+  const normalized = userId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const suffix = normalized.slice(-6).padStart(6, '0');
+  return `Player-${suffix}`;
 }
 
 export default function App() {
@@ -198,11 +188,13 @@ export default function App() {
         }
 
         const value = docSnapshot.data();
-        const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
-        const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+        const alias =
+          typeof value.alias === 'string'
+            ? normalizeName(value.alias)
+            : createUserAlias(docSnapshot.id);
         const role = value.role;
 
-        if (!name || !isUserRole(role)) {
+        if (!alias || !isUserRole(role)) {
           setUserProfile(null);
           setProfileReady(true);
           return;
@@ -210,9 +202,8 @@ export default function App() {
 
         setUserProfile({
           id: docSnapshot.id,
-          name,
-          role,
-          email
+          alias,
+          role
         });
         setProfileReady(true);
       },
@@ -252,10 +243,12 @@ export default function App() {
           const value = docSnapshot.data();
           const campaignId = typeof value.campaignId === 'string' ? value.campaignId : '';
           const userId = typeof value.uid === 'string' ? value.uid : '';
-          const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
-          const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+          const alias =
+            typeof value.alias === 'string'
+              ? normalizeName(value.alias)
+              : createUserAlias(userId);
 
-          if (!campaignId || !userId || !name) {
+          if (!campaignId || !userId || !alias) {
             return;
           }
 
@@ -263,8 +256,7 @@ export default function App() {
             id: docSnapshot.id,
             campaignId,
             userId,
-            name,
-            email
+            alias
           });
         });
 
@@ -383,22 +375,23 @@ export default function App() {
         snapshot.forEach((docSnapshot) => {
           const value = docSnapshot.data();
           const userId = typeof value.uid === 'string' ? value.uid : '';
-          const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
-          const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+          const alias =
+            typeof value.alias === 'string'
+              ? normalizeName(value.alias)
+              : createUserAlias(userId);
 
-          if (!userId || !name) {
+          if (!userId || !alias) {
             return;
           }
 
           users.push({
             id: userId,
-            name,
-            email,
+            alias,
             role: 'member'
           });
         });
 
-        users.sort((left, right) => left.name.localeCompare(right.name));
+        users.sort((left, right) => left.alias.localeCompare(right.alias));
         setCampaignUsers(users);
       },
       () => {
@@ -648,7 +641,7 @@ export default function App() {
     const inviteCode = normalizeInviteCode(inviteCodeInput);
     const authUser = auth?.currentUser ?? null;
     const signedInUserId = authUser?.uid ?? authUserId;
-    const signedInEmail = getSignedInEmail(authUser);
+    const userAlias = createUserAlias(signedInUserId);
 
     if (!signedInUserId) {
       setSignInError('Sign in with Google first.');
@@ -657,19 +650,6 @@ export default function App() {
 
     if (!isSignedInWithGoogle(authUser)) {
       setSignInError('Google sign-in session is missing. Please continue with Google again.');
-      return;
-    }
-
-    if (!signedInEmail) {
-      setSignInError(
-        'Unable to confirm your Google account email. Try a Google account with an available email address.'
-      );
-      return;
-    }
-
-    const username = getUsernameFromEmail(signedInEmail);
-    if (!username) {
-      setSignInError('Unable to derive a username from your Google account email.');
       return;
     }
 
@@ -716,18 +696,21 @@ export default function App() {
         throw new Error('Invite code is misconfigured.');
       }
 
-      const hasExistingMembership = memberships.some(
-        (membership) => membership.campaignId === campaignId && membership.userId === signedInUserId
+      const membershipDocRef = doc(
+        membershipsRef,
+        membershipDocumentId(campaignId, signedInUserId)
       );
+      const membershipSnapshot = await transaction.get(membershipDocRef);
+      const hasExistingMembership = membershipSnapshot.exists();
 
       if (!enabled && !hasExistingMembership) {
         throw new Error('This invite code is disabled.');
       }
 
-      const membershipDocRef = doc(
-        membershipsRef,
-        membershipDocumentId(campaignId, signedInUserId)
-      );
+      const existingJoinedAt = hasExistingMembership ? membershipSnapshot.data().joinedAt : null;
+      if (hasExistingMembership && !existingJoinedAt) {
+        throw new Error('Membership record is invalid.');
+      }
 
       inviteCampaignId = campaignId;
 
@@ -736,12 +719,10 @@ export default function App() {
         {
           campaignId,
           uid: signedInUserId,
-          name: username,
-          email: signedInEmail,
-          ...(hasExistingMembership ? {} : { joinedAt: serverTimestamp() }),
+          alias: userAlias,
+          joinedAt: hasExistingMembership ? existingJoinedAt : serverTimestamp(),
           lastSeenAt: serverTimestamp()
-        },
-        { merge: true }
+        }
       );
 
       if (userSnapshot.exists()) {
@@ -750,27 +731,29 @@ export default function App() {
           throw new Error('Profile role is invalid.');
         }
 
+        const existingCreatedAt = userSnapshot.data().createdAt;
+        if (!existingCreatedAt) {
+          throw new Error('Profile created timestamp is invalid.');
+        }
+
         transaction.set(
           userDocRef,
           {
-            name: username,
-            email: signedInEmail,
+            alias: userAlias,
             role: existingRole,
+            createdAt: existingCreatedAt,
             lastSeenAt: serverTimestamp()
-          },
-          { merge: true }
+          }
         );
       } else {
         transaction.set(
           userDocRef,
           {
-            name: username,
-            email: signedInEmail,
+            alias: userAlias,
             role: 'member',
             createdAt: serverTimestamp(),
             lastSeenAt: serverTimestamp()
-          },
-          { merge: true }
+          }
         );
       }
 
@@ -891,12 +874,10 @@ export default function App() {
               {
                 campaignId: campaignDocRef.id,
                 uid: currentUser.id,
-                name: currentUser.name,
-                email: currentUser.email,
+                alias: currentUser.alias,
                 joinedAt: serverTimestamp(),
                 lastSeenAt: serverTimestamp()
-              },
-              { merge: true }
+              }
             );
             transaction.set(
               campaignSettingsDocRef,
@@ -1220,7 +1201,7 @@ export default function App() {
     );
   }
 
-  const signedInName = getUsernameFromEmail(getSignedInEmail(auth?.currentUser ?? null)) || 'Unknown';
+  const signedInName = createUserAlias(authUserId);
 
   const campaignSelectionControl = (
     <label className="month-picker" htmlFor="campaign-select">
@@ -1333,9 +1314,9 @@ export default function App() {
       <header className="app-header">
         <h1>DnD Group Scheduler</h1>
         <p>
-          Signed in as <strong>{currentUser.name}</strong> ({currentUser.role}). Campaign:{' '}
+          Signed in as <strong>{currentUser.alias}</strong> ({currentUser.role}). Campaign:{' '}
           <strong>{selectedCampaign?.name ?? 'None selected'}</strong>. Host:{' '}
-          <strong>{hostUser?.name ?? 'Not set'}</strong>
+          <strong>{hostUser?.alias ?? 'Not set'}</strong>
         </p>
         <div className="header-controls">
           {campaignSelectionControl}

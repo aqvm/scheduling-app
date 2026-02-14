@@ -15,13 +15,15 @@ export type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavai
 export type UserRole = 'member' | 'admin';
 
 /**
- * A user profile stored under `apps/{campaignId}/users/{uid}`.
+ * A user profile stored under `apps/{namespace}/users/{uid}`.
  */
 export type UserProfile = {
   id: string;
-  name: string;
+  /**
+   * Pseudonymous in-app identifier derived from uid.
+   */
+  alias: string;
   role: UserRole;
-  email: string;
 };
 
 /**
@@ -42,8 +44,10 @@ export type CampaignMembership = {
   id: string;
   campaignId: string;
   userId: string;
-  name: string;
-  email: string;
+  /**
+   * Snapshot of the user's current in-app alias for this membership.
+   */
+  alias: string;
 };
 
 /**
