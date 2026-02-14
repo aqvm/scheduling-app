@@ -38,6 +38,10 @@ service cloud.firestore {
         request.resource.data.days.values().hasOnly(['unspecified', 'available', 'maybe', 'unavailable']);
     }
 
+    function isMembershipIdForUid(membershipId, uid) {
+      return membershipId.matches('^.+_' + uid + '$');
+    }
+
     match /apps/{appNamespace}/users/{userId} {
       allow get: if signedIn() &&
         (
@@ -136,7 +140,23 @@ service cloud.firestore {
     }
 
     match /apps/{appNamespace}/memberships/{membershipId} {
-      allow read: if signedIn() &&
+      allow get: if signedIn() &&
+        (
+          isAdmin(appNamespace, request.auth.uid) ||
+          (
+            resource != null &&
+            (
+              resource.data.uid == request.auth.uid ||
+              isCampaignMember(appNamespace, resource.data.campaignId, request.auth.uid)
+            )
+          ) ||
+          (
+            resource == null &&
+            isMembershipIdForUid(membershipId, request.auth.uid)
+          )
+        );
+
+      allow list: if signedIn() &&
         (
           isAdmin(appNamespace, request.auth.uid) ||
           resource.data.uid == request.auth.uid ||
