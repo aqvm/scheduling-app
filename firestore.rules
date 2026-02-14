@@ -48,6 +48,23 @@ service cloud.firestore {
         alias.size() <= 64;
     }
 
+    function hasValidNameChangeRequestStatus(status) {
+      return status == 'pending' || status == 'approved' || status == 'rejected';
+    }
+
+    function nameChangeRequestPath(appNamespace, membershipId) {
+      return /databases/$(database)/documents/apps/$(appNamespace)/nameChangeRequests/$(membershipId);
+    }
+
+    function canAdminApplyApprovedNameChange(appNamespace, membershipId, nextData) {
+      return existsAfter(nameChangeRequestPath(appNamespace, membershipId)) &&
+        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.status == 'approved' &&
+        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.uid == nextData.uid &&
+        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.campaignId == nextData.campaignId &&
+        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.requestedAlias == nextData.alias &&
+        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.reviewedByUid == request.auth.uid;
+    }
+
     function hasImmutableMembershipAlias(existingData, nextData) {
       return (
         existingData.alias is string &&
@@ -146,6 +163,65 @@ service cloud.firestore {
       allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
     }
 
+    match /apps/{appNamespace}/nameChangeRequests/{requestId} {
+      allow get: if signedIn() &&
+        (
+          isAdmin(appNamespace, request.auth.uid) ||
+          (
+            resource != null &&
+            resource.data.uid == request.auth.uid
+          ) ||
+          (
+            resource == null &&
+            isMembershipIdForUid(requestId, request.auth.uid)
+          )
+        );
+
+      allow list: if signedIn() && isAdmin(appNamespace, request.auth.uid);
+
+      allow create: if signedIn() &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'requestedAlias', 'status', 'createdByUid', 'reviewedByUid', 'createdAt', 'updatedAt']) &&
+        request.resource.data.campaignId is string &&
+        request.resource.data.campaignId.size() > 0 &&
+        request.resource.data.uid == request.auth.uid &&
+        requestId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
+        isCampaignMember(appNamespace, request.resource.data.campaignId, request.auth.uid) &&
+        hasValidAlias(request.resource.data.requestedAlias) &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.reviewedByUid == '' &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow update: if signedIn() &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'requestedAlias', 'status', 'createdByUid', 'reviewedByUid', 'createdAt', 'updatedAt']) &&
+        requestId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
+        request.resource.data.campaignId == resource.data.campaignId &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        hasValidAlias(request.resource.data.requestedAlias) &&
+        hasValidNameChangeRequestStatus(request.resource.data.status) &&
+        request.resource.data.updatedAt is timestamp &&
+        (
+          (
+            request.auth.uid == resource.data.uid &&
+            request.resource.data.status == 'pending' &&
+            request.resource.data.reviewedByUid == '' &&
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['requestedAlias', 'status', 'reviewedByUid', 'updatedAt'])
+          ) ||
+          (
+            isAdmin(appNamespace, request.auth.uid) &&
+            request.resource.data.requestedAlias == resource.data.requestedAlias &&
+            (request.resource.data.status == 'approved' || request.resource.data.status == 'rejected') &&
+            request.resource.data.reviewedByUid == request.auth.uid &&
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'reviewedByUid', 'updatedAt'])
+          )
+        );
+
+      allow delete: if false;
+    }
+
     match /apps/{appNamespace}/memberships/{membershipId} {
       allow get: if signedIn() &&
         (
@@ -189,16 +265,25 @@ service cloud.firestore {
         );
 
       allow update: if signedIn() &&
-        hasUserProfile(appNamespace, request.auth.uid) &&
-        request.auth.uid == resource.data.uid &&
         request.resource.data.keys().hasOnly(['campaignId', 'uid', 'alias', 'joinedAt', 'lastSeenAt']) &&
         membershipId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
         request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt']) &&
         request.resource.data.campaignId == resource.data.campaignId &&
         request.resource.data.uid == resource.data.uid &&
         request.resource.data.joinedAt == resource.data.joinedAt &&
-        hasImmutableMembershipAlias(resource.data, request.resource.data) &&
-        request.resource.data.lastSeenAt is timestamp;
+        request.resource.data.lastSeenAt is timestamp &&
+        (
+          (
+            hasUserProfile(appNamespace, request.auth.uid) &&
+            request.auth.uid == resource.data.uid &&
+            hasImmutableMembershipAlias(resource.data, request.resource.data)
+          ) ||
+          (
+            isAdmin(appNamespace, request.auth.uid) &&
+            hasValidAlias(request.resource.data.alias) &&
+            canAdminApplyApprovedNameChange(appNamespace, membershipId, request.resource.data)
+          )
+        );
 
       allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
     }

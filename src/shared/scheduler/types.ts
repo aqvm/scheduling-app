@@ -13,6 +13,7 @@ export type AvailabilityStatus = 'unspecified' | 'available' | 'maybe' | 'unavai
  * Access levels recognized by the app.
  */
 export type UserRole = 'member' | 'admin';
+export type NameChangeRequestStatus = 'pending' | 'approved' | 'rejected';
 
 /**
  * A user profile stored under `apps/{namespace}/users/{uid}`.
@@ -48,6 +49,18 @@ export type CampaignMembership = {
    * Snapshot of the user's current in-app alias for this membership.
    */
   alias: string;
+};
+
+/**
+ * A campaign-scoped alias-change request awaiting admin review.
+ */
+export type NameChangeRequest = {
+  id: string;
+  campaignId: string;
+  userId: string;
+  requestedAlias: string;
+  status: NameChangeRequestStatus;
+  createdByUid: string;
 };
 
 /**

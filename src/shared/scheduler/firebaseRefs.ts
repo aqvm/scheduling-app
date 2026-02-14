@@ -73,3 +73,11 @@ export function getMembershipsCollectionRef() {
   const appRef = getAppDocumentRef();
   return appRef ? collection(appRef, 'memberships') : null;
 }
+
+/**
+ * Name-change request collection reference: `apps/{namespace}/nameChangeRequests`.
+ */
+export function getNameChangeRequestsCollectionRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? collection(appRef, 'nameChangeRequests') : null;
+}

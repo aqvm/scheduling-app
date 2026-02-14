@@ -29,6 +29,7 @@ import { getMonthDates, isValidMonthValue, toDateKey, toMonthValue } from './sha
 import {
   getAvailabilityCollectionRef,
   getCampaignInvitesCollectionRef,
+  getNameChangeRequestsCollectionRef,
   getCampaignSettingsCollectionRef,
   getCampaignSettingsDocumentRef,
   getCampaignsCollectionRef,
@@ -41,9 +42,16 @@ import {
   type AvailabilityStatus,
   type Campaign,
   type CampaignMembership,
+  type NameChangeRequest,
   type UserProfile
 } from './shared/scheduler/types';
-import { isAvailabilityStatus, isUserRole, normalizeInviteCode, normalizeName } from './shared/scheduler/validation';
+import {
+  isAvailabilityStatus,
+  isNameChangeRequestStatus,
+  isUserRole,
+  normalizeInviteCode,
+  normalizeName
+} from './shared/scheduler/validation';
 
 const MAX_INVITE_CREATE_ATTEMPTS = 6;
 const POPUP_REDIRECT_FALLBACK_ERRORS = new Set([
@@ -89,6 +97,10 @@ function createUserAlias(userId: string): string {
   return `Player-${suffix}`;
 }
 
+function isGeneratedAlias(alias: string): boolean {
+  return /^Player-[A-Z0-9]{6}$/.test(alias);
+}
+
 export default function App() {
   const [authUserId, setAuthUserId] = useState('');
   const [authReady, setAuthReady] = useState(false);
@@ -116,9 +128,14 @@ export default function App() {
   const [joinDisplayNameInput, setJoinDisplayNameInput] = useState('');
   const [joinInviteCode, setJoinInviteCode] = useState('');
   const [isJoiningCampaign, setIsJoiningCampaign] = useState(false);
+  const [isSubmittingNameChangeRequest, setIsSubmittingNameChangeRequest] = useState(false);
+  const [processingNameChangeRequestId, setProcessingNameChangeRequestId] = useState('');
   const [signInError, setSignInError] = useState('');
+  const [nameChangeInfo, setNameChangeInfo] = useState('');
   const [appError, setAppError] = useState('');
   const [managementError, setManagementError] = useState('');
+  const [activeNameChangeRequest, setActiveNameChangeRequest] = useState<NameChangeRequest | null>(null);
+  const [nameChangeRequests, setNameChangeRequests] = useState<NameChangeRequest[]>([]);
 
   const currentUser =
     userProfile !== null && authUserId.length > 0 && userProfile.id === authUserId ? userProfile : null;
@@ -281,6 +298,131 @@ export default function App() {
 
     return () => unsubscribe();
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || !selectedCampaignId) {
+      setActiveNameChangeRequest(null);
+      return;
+    }
+
+    const nameChangeRequestsRef = getNameChangeRequestsCollectionRef();
+    if (!nameChangeRequestsRef) {
+      setActiveNameChangeRequest(null);
+      return;
+    }
+
+    const requestDocRef = doc(
+      nameChangeRequestsRef,
+      membershipDocumentId(selectedCampaignId, currentUser.id)
+    );
+
+    const unsubscribe = onSnapshot(
+      requestDocRef,
+      (docSnapshot) => {
+        if (!docSnapshot.exists()) {
+          setActiveNameChangeRequest(null);
+          return;
+        }
+
+        const value = docSnapshot.data();
+        const campaignId = typeof value.campaignId === 'string' ? value.campaignId : '';
+        const userId = typeof value.uid === 'string' ? value.uid : '';
+        const requestedAlias =
+          typeof value.requestedAlias === 'string' ? normalizeName(value.requestedAlias) : '';
+        const status = value.status;
+        const createdByUid = typeof value.createdByUid === 'string' ? value.createdByUid : '';
+
+        if (
+          !campaignId ||
+          !userId ||
+          !requestedAlias ||
+          !createdByUid ||
+          !isNameChangeRequestStatus(status)
+        ) {
+          setActiveNameChangeRequest(null);
+          return;
+        }
+
+        setActiveNameChangeRequest({
+          id: docSnapshot.id,
+          campaignId,
+          userId,
+          requestedAlias,
+          status,
+          createdByUid
+        });
+      },
+      () => {
+        setActiveNameChangeRequest(null);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser, selectedCampaignId]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'admin' || !selectedCampaignId) {
+      setNameChangeRequests([]);
+      return;
+    }
+
+    const nameChangeRequestsRef = getNameChangeRequestsCollectionRef();
+    if (!nameChangeRequestsRef) {
+      setNameChangeRequests([]);
+      return;
+    }
+
+    const nameChangeRequestsQuery = query(
+      nameChangeRequestsRef,
+      where('campaignId', '==', selectedCampaignId),
+      limit(500)
+    );
+
+    const unsubscribe = onSnapshot(
+      nameChangeRequestsQuery,
+      (snapshot) => {
+        const pendingRequests: NameChangeRequest[] = [];
+
+        snapshot.forEach((docSnapshot) => {
+          const value = docSnapshot.data();
+          const campaignId = typeof value.campaignId === 'string' ? value.campaignId : '';
+          const userId = typeof value.uid === 'string' ? value.uid : '';
+          const requestedAlias =
+            typeof value.requestedAlias === 'string' ? normalizeName(value.requestedAlias) : '';
+          const status = value.status;
+          const createdByUid = typeof value.createdByUid === 'string' ? value.createdByUid : '';
+
+          if (
+            !campaignId ||
+            !userId ||
+            !requestedAlias ||
+            !createdByUid ||
+            !isNameChangeRequestStatus(status) ||
+            status !== 'pending'
+          ) {
+            return;
+          }
+
+          pendingRequests.push({
+            id: docSnapshot.id,
+            campaignId,
+            userId,
+            requestedAlias,
+            status,
+            createdByUid
+          });
+        });
+
+        pendingRequests.sort((left, right) => left.requestedAlias.localeCompare(right.requestedAlias));
+        setNameChangeRequests(pendingRequests);
+      },
+      () => {
+        setNameChangeRequests([]);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser, selectedCampaignId]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -690,6 +832,7 @@ export default function App() {
     const userDocRef = doc(usersRef, signedInUserId);
 
     setSignInError('');
+    setNameChangeInfo('');
     setIsJoiningCampaign(true);
 
     void runTransaction(db, async (transaction) => {
@@ -736,6 +879,8 @@ export default function App() {
       const effectiveMembershipAlias = hasExistingMembership
         ? existingMembershipAlias || fallbackUserAlias
         : requestedAlias;
+      const nextUserAlias =
+        hasExistingMembership || requestedAlias.length === 0 ? fallbackUserAlias : requestedAlias;
 
       if (!effectiveMembershipAlias) {
         throw new Error(
@@ -777,7 +922,7 @@ export default function App() {
         transaction.set(
           userDocRef,
           {
-            alias: fallbackUserAlias,
+            alias: nextUserAlias,
             role: existingRole,
             createdAt: existingCreatedAt,
             lastSeenAt: serverTimestamp()
@@ -787,7 +932,7 @@ export default function App() {
         transaction.set(
           userDocRef,
           {
-            alias: fallbackUserAlias,
+            alias: nextUserAlias,
             role: 'member',
             createdAt: serverTimestamp(),
             lastSeenAt: serverTimestamp()
@@ -805,6 +950,7 @@ export default function App() {
         setJoinDisplayNameInput('');
         setJoinInviteCode('');
         setSignInError('');
+        setNameChangeInfo('');
         setAppError('');
       })
       .catch((error: unknown) => {
@@ -813,6 +959,229 @@ export default function App() {
       .finally(() => {
         setIsJoiningCampaign(false);
       });
+  };
+
+  const onRequestNameChange = (): void => {
+    if (!currentUser || !selectedCampaignId) {
+      setSignInError('Select a campaign before requesting a name change.');
+      return;
+    }
+
+    const requestedAlias = normalizeName(joinDisplayNameInput);
+    if (!requestedAlias) {
+      setSignInError('Enter the display name you want to request.');
+      return;
+    }
+
+    if (requestedAlias.length > 64) {
+      setSignInError('Display name must be 64 characters or fewer.');
+      return;
+    }
+
+    if (!selectedMembershipAlias) {
+      setSignInError('Join this campaign before requesting a display name change.');
+      return;
+    }
+
+    if (requestedAlias === selectedMembershipAlias) {
+      setSignInError('That is already your display name for this campaign.');
+      return;
+    }
+
+    if (
+      activeNameChangeRequest &&
+      activeNameChangeRequest.status === 'pending' &&
+      activeNameChangeRequest.requestedAlias === requestedAlias
+    ) {
+      setSignInError('That name change request is already pending admin approval.');
+      return;
+    }
+
+    if (!db) {
+      setSignInError('Firebase is not configured.');
+      return;
+    }
+
+    const nameChangeRequestsRef = getNameChangeRequestsCollectionRef();
+    if (!nameChangeRequestsRef) {
+      setSignInError('Firebase is not configured.');
+      return;
+    }
+
+    const requestDocRef = doc(
+      nameChangeRequestsRef,
+      membershipDocumentId(selectedCampaignId, currentUser.id)
+    );
+
+    setSignInError('');
+    setNameChangeInfo('');
+    setIsSubmittingNameChangeRequest(true);
+
+    void runTransaction(db, async (transaction) => {
+      const existingRequestSnapshot = await transaction.get(requestDocRef);
+      const existingCreatedAt =
+        existingRequestSnapshot.exists() && existingRequestSnapshot.data().createdAt
+          ? existingRequestSnapshot.data().createdAt
+          : serverTimestamp();
+
+      transaction.set(requestDocRef, {
+        campaignId: selectedCampaignId,
+        uid: currentUser.id,
+        requestedAlias,
+        status: 'pending',
+        createdByUid: currentUser.id,
+        reviewedByUid: '',
+        createdAt: existingCreatedAt,
+        updatedAt: serverTimestamp()
+      });
+    })
+      .then(() => {
+        setJoinDisplayNameInput('');
+        setNameChangeInfo('Name change request submitted for admin approval.');
+      })
+      .catch((error: unknown) => {
+        setSignInError(formatFirebaseError(error, 'Unable to submit name change request right now.'));
+      })
+      .finally(() => {
+        setIsSubmittingNameChangeRequest(false);
+      });
+  };
+
+  const onReviewNameChangeRequest = (
+    requestId: string,
+    nextStatus: 'approved' | 'rejected'
+  ): void => {
+    if (!currentUser || currentUser.role !== 'admin' || !selectedCampaignId || !db) {
+      return;
+    }
+
+    const nameChangeRequestsRef = getNameChangeRequestsCollectionRef();
+    const membershipsRef = getMembershipsCollectionRef();
+    const usersRef = getUsersCollectionRef();
+    if (!nameChangeRequestsRef || !membershipsRef || !usersRef) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+
+    const requestDocRef = doc(nameChangeRequestsRef, requestId);
+
+    setManagementError('');
+    setProcessingNameChangeRequestId(requestId);
+
+    void runTransaction(db, async (transaction) => {
+      const requestSnapshot = await transaction.get(requestDocRef);
+      if (!requestSnapshot.exists()) {
+        throw new Error('Name change request no longer exists.');
+      }
+
+      const requestValue = requestSnapshot.data();
+      const requestCampaignId =
+        typeof requestValue.campaignId === 'string' ? requestValue.campaignId : '';
+      const requestUserId = typeof requestValue.uid === 'string' ? requestValue.uid : '';
+      const requestedAlias =
+        typeof requestValue.requestedAlias === 'string' ? normalizeName(requestValue.requestedAlias) : '';
+      const requestStatus = requestValue.status;
+      const createdByUid =
+        typeof requestValue.createdByUid === 'string' ? requestValue.createdByUid : '';
+      const createdAt = requestValue.createdAt;
+
+      if (
+        !requestCampaignId ||
+        !requestUserId ||
+        !requestedAlias ||
+        !createdByUid ||
+        !createdAt ||
+        !isNameChangeRequestStatus(requestStatus)
+      ) {
+        throw new Error('Name change request is invalid.');
+      }
+
+      if (requestCampaignId !== selectedCampaignId) {
+        throw new Error('Name change request campaign does not match the selected campaign.');
+      }
+
+      if (requestStatus !== 'pending') {
+        throw new Error('Name change request was already reviewed.');
+      }
+
+      if (nextStatus === 'approved') {
+        const membershipDocRef = doc(
+          membershipsRef,
+          membershipDocumentId(requestCampaignId, requestUserId)
+        );
+        const membershipSnapshot = await transaction.get(membershipDocRef);
+        if (!membershipSnapshot.exists()) {
+          throw new Error('Campaign membership no longer exists for this request.');
+        }
+
+        const membershipValue = membershipSnapshot.data();
+        const joinedAt = membershipValue.joinedAt;
+        if (!joinedAt) {
+          throw new Error('Campaign membership timestamp is invalid.');
+        }
+
+        transaction.set(membershipDocRef, {
+          campaignId: requestCampaignId,
+          uid: requestUserId,
+          alias: requestedAlias,
+          joinedAt,
+          lastSeenAt: serverTimestamp()
+        });
+
+        if (requestUserId === currentUser.id) {
+          const userDocRef = doc(usersRef, requestUserId);
+          const userSnapshot = await transaction.get(userDocRef);
+          if (userSnapshot.exists()) {
+            const userValue = userSnapshot.data();
+            const existingRole = userValue.role;
+            const existingCreatedAt = userValue.createdAt;
+            const existingUserAlias =
+              typeof userValue.alias === 'string' ? normalizeName(userValue.alias) : '';
+
+            if (!isUserRole(existingRole) || !existingCreatedAt) {
+              throw new Error('User profile is invalid.');
+            }
+
+            const nextUserAlias =
+              !existingUserAlias || isGeneratedAlias(existingUserAlias)
+                ? requestedAlias
+                : existingUserAlias;
+
+            transaction.set(userDocRef, {
+              alias: nextUserAlias,
+              role: existingRole,
+              createdAt: existingCreatedAt,
+              lastSeenAt: serverTimestamp()
+            });
+          }
+        }
+      }
+
+      transaction.set(requestDocRef, {
+        campaignId: requestCampaignId,
+        uid: requestUserId,
+        requestedAlias,
+        status: nextStatus,
+        createdByUid,
+        reviewedByUid: currentUser.id,
+        createdAt,
+        updatedAt: serverTimestamp()
+      });
+    })
+      .catch((error: unknown) => {
+        setManagementError(formatFirebaseError(error, 'Unable to review name change request.'));
+      })
+      .finally(() => {
+        setProcessingNameChangeRequestId('');
+      });
+  };
+
+  const onApproveNameChangeRequest = (requestId: string): void => {
+    onReviewNameChangeRequest(requestId, 'approved');
+  };
+
+  const onRejectNameChangeRequest = (requestId: string): void => {
+    onReviewNameChangeRequest(requestId, 'rejected');
   };
 
   const onGoogleSignIn = (): void => {
@@ -913,7 +1282,7 @@ export default function App() {
               {
                 campaignId: campaignDocRef.id,
                 uid: currentUser.id,
-                alias: currentUser.alias,
+                alias: displayAlias || currentUser.alias,
                 joinedAt: serverTimestamp(),
                 lastSeenAt: serverTimestamp()
               }
@@ -1175,9 +1544,14 @@ export default function App() {
     setJoinDisplayNameInput('');
     setJoinInviteCode('');
     setIsJoiningCampaign(false);
+    setIsSubmittingNameChangeRequest(false);
+    setProcessingNameChangeRequestId('');
+    setNameChangeInfo('');
     setManagementError('');
     setSignInError('');
     setAppError('');
+    setActiveNameChangeRequest(null);
+    setNameChangeRequests([]);
     setIsPainting(false);
     setPendingEditsByCampaign({});
     setIsSavingChanges(false);
@@ -1282,6 +1656,9 @@ export default function App() {
             if (signInError) {
               setSignInError('');
             }
+            if (nameChangeInfo) {
+              setNameChangeInfo('');
+            }
           }}
           autoComplete="nickname"
           spellCheck={false}
@@ -1310,8 +1687,32 @@ export default function App() {
       <button type="submit" className="primary-button" disabled={isJoiningCampaign}>
         {isJoiningCampaign ? 'Joining...' : 'Join'}
       </button>
+      {currentUser ? (
+        <button
+          type="button"
+          className="ghost-button"
+          disabled={
+            isSubmittingNameChangeRequest ||
+            !selectedCampaignId ||
+            !selectedMembershipAlias ||
+            normalizeName(joinDisplayNameInput).length === 0
+          }
+          onClick={onRequestNameChange}
+        >
+          {isSubmittingNameChangeRequest ? 'Requesting...' : 'Request Name Change'}
+        </button>
+      ) : null}
     </form>
   );
+
+  const activeNameChangeRequestNote =
+    activeNameChangeRequest && activeNameChangeRequest.campaignId === selectedCampaignId
+      ? activeNameChangeRequest.status === 'pending'
+        ? `Pending name change request: "${activeNameChangeRequest.requestedAlias}".`
+        : activeNameChangeRequest.status === 'approved'
+          ? `Name change approved: "${activeNameChangeRequest.requestedAlias}".`
+          : `Name change request was rejected: "${activeNameChangeRequest.requestedAlias}".`
+      : '';
 
   if (!currentUser) {
     return (
@@ -1382,6 +1783,8 @@ export default function App() {
           </button>
         </div>
         {signInError ? <p className="form-error">{signInError}</p> : null}
+        {nameChangeInfo ? <p className="form-note">{nameChangeInfo}</p> : null}
+        {activeNameChangeRequestNote ? <p className="form-note">{activeNameChangeRequestNote}</p> : null}
         {appError ? <p className="form-error">{appError}</p> : null}
       </header>
 
@@ -1432,6 +1835,8 @@ export default function App() {
                 users={campaignUsers}
                 hostUserId={hostUserId}
                 setHostUserId={onSetHostUserId}
+                nameChangeRequests={nameChangeRequests}
+                processingNameChangeRequestId={processingNameChangeRequestId}
                 managementError={managementError}
                 isCreatingCampaign={isCreatingCampaign}
                 isUpdatingInvite={isUpdatingInvite}
@@ -1441,6 +1846,8 @@ export default function App() {
                 onSetInviteEnabled={onSetInviteEnabled}
                 onDeleteCampaign={onDeleteCampaign}
                 onKickUser={onKickUser}
+                onApproveNameChangeRequest={onApproveNameChangeRequest}
+                onRejectNameChangeRequest={onRejectNameChangeRequest}
               />
             }
           />

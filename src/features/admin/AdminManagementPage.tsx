@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Campaign, UserProfile } from '../../shared/scheduler/types';
+import type { Campaign, NameChangeRequest, UserProfile } from '../../shared/scheduler/types';
 
 /**
  * Props used by the admin-only management page.
@@ -10,6 +10,8 @@ type AdminManagementPageProps = {
   users: UserProfile[];
   hostUserId: string;
   setHostUserId: (userId: string) => void;
+  nameChangeRequests: NameChangeRequest[];
+  processingNameChangeRequestId: string;
   managementError: string;
   isCreatingCampaign: boolean;
   isUpdatingInvite: boolean;
@@ -19,6 +21,8 @@ type AdminManagementPageProps = {
   onSetInviteEnabled: (enabled: boolean) => void;
   onDeleteCampaign: () => void;
   onKickUser: (userId: string) => void;
+  onApproveNameChangeRequest: (requestId: string) => void;
+  onRejectNameChangeRequest: (requestId: string) => void;
 };
 
 /**
@@ -34,6 +38,8 @@ export function AdminManagementPage({
   users,
   hostUserId,
   setHostUserId,
+  nameChangeRequests,
+  processingNameChangeRequestId,
   managementError,
   isCreatingCampaign,
   isUpdatingInvite,
@@ -42,7 +48,9 @@ export function AdminManagementPage({
   onCreateCampaign,
   onSetInviteEnabled,
   onDeleteCampaign,
-  onKickUser
+  onKickUser,
+  onApproveNameChangeRequest,
+  onRejectNameChangeRequest
 }: AdminManagementPageProps) {
   const [campaignName, setCampaignName] = useState('');
   const [inviteCopyState, setInviteCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -88,7 +96,7 @@ export function AdminManagementPage({
   return (
     <section className="page-card">
       <h2>Campaign Management</h2>
-      <p>Create campaigns, control invite code state, assign host, and remove users.</p>
+      <p>Create campaigns, control invites, review name-change requests, assign host, and remove users.</p>
 
       <section className="summary-block">
         <h3>Create Campaign</h3>
@@ -179,6 +187,51 @@ export function AdminManagementPage({
       </section>
 
       {managementError ? <p className="form-error">{managementError}</p> : null}
+      <section className="summary-block">
+        <h3>Name Change Requests</h3>
+        {!selectedCampaign ? (
+          <p className="empty-note">Select a campaign first.</p>
+        ) : (
+          <div className="admin-list">
+            {nameChangeRequests.length === 0 ? (
+              <p className="empty-note">No pending requests.</p>
+            ) : (
+              nameChangeRequests.map((request) => {
+                const requestUser = users.find((user) => user.id === request.userId) ?? null;
+                const isProcessing = processingNameChangeRequestId === request.id;
+
+                return (
+                  <div key={`name-request-${request.id}`} className="admin-row">
+                    <span>
+                      <strong>{requestUser?.alias ?? 'Unknown user'}</strong>
+                      <small>User ID: {request.userId}</small>
+                      <small>Requested Name: {request.requestedAlias}</small>
+                    </span>
+                    <div className="admin-actions">
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        disabled={isProcessing}
+                        onClick={() => onApproveNameChangeRequest(request.id)}
+                      >
+                        {isProcessing ? 'Updating...' : 'Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button danger-button"
+                        disabled={isProcessing}
+                        onClick={() => onRejectNameChangeRequest(request.id)}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </section>
 
       <section className="summary-block">
         <h3>Host Assignment</h3>

@@ -1,4 +1,4 @@
-import type { AvailabilityStatus, UserRole } from './types';
+import type { AvailabilityStatus, NameChangeRequestStatus, UserRole } from './types';
 
 /**
  * This file groups type guards and normalization helpers used at trust boundaries
@@ -20,6 +20,13 @@ export function isAvailabilityStatus(value: unknown): value is AvailabilityStatu
  */
 export function isUserRole(value: unknown): value is UserRole {
   return value === 'member' || value === 'admin';
+}
+
+/**
+ * Runtime guard for alias-change request status values.
+ */
+export function isNameChangeRequestStatus(value: unknown): value is NameChangeRequestStatus {
+  return value === 'pending' || value === 'approved' || value === 'rejected';
 }
 
 /**
