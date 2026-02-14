@@ -25,7 +25,6 @@ import { AdminManagementPage } from './features/admin/AdminManagementPage';
 import { SignInPage } from './features/auth/SignInPage';
 import { PersonalAvailabilityPage } from './features/availability/PersonalAvailabilityPage';
 import { HostSummaryPage } from './features/host/HostSummaryPage';
-import { LEGACY_ADMIN_INVITE_CODE, LEGACY_MEMBER_INVITE_CODE } from './shared/scheduler/constants';
 import { getMonthDates, isValidMonthValue, toDateKey, toMonthValue } from './shared/scheduler/date';
 import {
   getAvailabilityCollectionRef,
@@ -42,8 +41,7 @@ import {
   type AvailabilityStatus,
   type Campaign,
   type CampaignMembership,
-  type UserProfile,
-  type UserRole
+  type UserProfile
 } from './shared/scheduler/types';
 import { isAvailabilityStatus, isUserRole, normalizeInviteCode, normalizeName } from './shared/scheduler/validation';
 
@@ -702,32 +700,48 @@ export default function App() {
     void runTransaction(db, async (transaction) => {
       const userSnapshot = await transaction.get(userDocRef);
       let inviteCampaignId = '';
-      let roleForNewUser: UserRole = 'member';
 
       const inviteDocRef = doc(invitesRef, inviteCode);
       const inviteSnapshot = await transaction.get(inviteDocRef);
 
-      if (inviteSnapshot.exists()) {
-        const inviteValue = inviteSnapshot.data();
-        const campaignId =
-          typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
-        const enabled = inviteValue.enabled === true;
+      if (!inviteSnapshot.exists()) {
+        throw new Error('Invalid invite code.');
+      }
 
-        if (!campaignId) {
-          throw new Error('Invite code is misconfigured.');
-        }
+      const inviteValue = inviteSnapshot.data();
+      const campaignId =
+        typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
+      const enabled = inviteValue.enabled === true;
 
-        const membershipDocRef = doc(
-          membershipsRef,
-          membershipDocumentId(campaignId, signedInUserId)
+      if (!campaignId) {
+        throw new Error('Invite code is misconfigured.');
+      }
+
+      const membershipDocRef = doc(
+        membershipsRef,
+        membershipDocumentId(campaignId, signedInUserId)
+      );
+      const membershipSnapshot = await transaction.get(membershipDocRef);
+
+      if (!enabled && !membershipSnapshot.exists()) {
+        throw new Error('This invite code is disabled.');
+      }
+
+      inviteCampaignId = campaignId;
+
+      if (membershipSnapshot.exists()) {
+        transaction.set(
+          membershipDocRef,
+          {
+            campaignId,
+            uid: signedInUserId,
+            name: username,
+            email: signedInEmail,
+            lastSeenAt: serverTimestamp()
+          },
+          { merge: true }
         );
-        const membershipSnapshot = await transaction.get(membershipDocRef);
-
-        if (!enabled && !membershipSnapshot.exists()) {
-          throw new Error('This invite code is disabled.');
-        }
-
-        inviteCampaignId = campaignId;
+      } else {
         transaction.set(
           membershipDocRef,
           {
@@ -740,27 +754,21 @@ export default function App() {
           },
           { merge: true }
         );
+      }
 
-        const campaignSettingsDocRef = doc(settingsRef, campaignId);
-        const settingsSnapshot = await transaction.get(campaignSettingsDocRef);
-        const hostForCampaign =
-          typeof settingsSnapshot.data()?.hostUserId === 'string'
-            ? settingsSnapshot.data()?.hostUserId
-            : '';
+      const campaignSettingsDocRef = doc(settingsRef, campaignId);
+      const settingsSnapshot = await transaction.get(campaignSettingsDocRef);
+      const hostForCampaign =
+        typeof settingsSnapshot.data()?.hostUserId === 'string'
+          ? settingsSnapshot.data()?.hostUserId
+          : '';
 
-        if (!hostForCampaign) {
-          transaction.set(
-            campaignSettingsDocRef,
-            { hostUserId: signedInUserId, updatedAt: serverTimestamp() },
-            { merge: true }
-          );
-        }
-      } else if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
-        roleForNewUser = 'admin';
-      } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
-        roleForNewUser = 'member';
-      } else {
-        throw new Error('Invalid invite code.');
+      if (!hostForCampaign) {
+        transaction.set(
+          campaignSettingsDocRef,
+          { hostUserId: signedInUserId, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
       }
 
       if (userSnapshot.exists()) {
@@ -785,7 +793,7 @@ export default function App() {
           {
             name: username,
             email: signedInEmail,
-            role: roleForNewUser,
+            role: 'member',
             createdAt: serverTimestamp(),
             lastSeenAt: serverTimestamp()
           },
