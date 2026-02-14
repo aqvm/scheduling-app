@@ -6,7 +6,7 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 
 - Google sign-in + campaign invite-code onboarding
 - Multi-campaign membership with global campaign selector
-- Pseudonymous aliases only (no email/profile PII persisted in Firestore)
+- User-provided display names (no email/profile PII persisted in Firestore)
 - One invite code per campaign, with admin enable/disable controls
 - Dark-mode calendar UI
 - Paint-style availability editing (click or click-drag)
@@ -107,7 +107,7 @@ Invite-code flow:
 
 ## Data Minimization
 
-- Firestore persists only pseudonymous user alias + uid-based membership linkage.
+- Firestore persists only user-chosen display name alias + uid-based membership linkage.
 - Email addresses and other direct profile identifiers are not stored in app documents.
 - Existing historical records created before this policy change should be scrubbed/migrated.
 
