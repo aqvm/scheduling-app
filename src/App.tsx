@@ -1124,14 +1124,10 @@ export default function App() {
         if (!joinedAt) {
           throw new Error('Campaign membership timestamp is invalid.');
         }
-
-        transaction.set(membershipDocRef, {
-          campaignId: requestCampaignId,
-          uid: requestUserId,
-          alias: requestedAlias,
-          joinedAt,
-          lastSeenAt: serverTimestamp()
-        });
+        let shouldWriteUserProfile = false;
+        let nextUserAlias = '';
+        let existingRole: 'member' | 'admin' = 'member';
+        let existingCreatedAt: unknown = null;
 
         if (requestUserId === currentUser.id) {
           const userDocRef = doc(usersRef, requestUserId);
@@ -1147,18 +1143,29 @@ export default function App() {
               throw new Error('User profile is invalid.');
             }
 
-            const nextUserAlias =
+            nextUserAlias =
               !existingUserAlias || isGeneratedAlias(existingUserAlias)
                 ? requestedAlias
                 : existingUserAlias;
-
-            transaction.set(userDocRef, {
-              alias: nextUserAlias,
-              role: existingRole,
-              createdAt: existingCreatedAt,
-              lastSeenAt: serverTimestamp()
-            });
+            shouldWriteUserProfile = true;
           }
+        }
+
+        transaction.set(membershipDocRef, {
+          campaignId: requestCampaignId,
+          uid: requestUserId,
+          alias: requestedAlias,
+          joinedAt,
+          lastSeenAt: serverTimestamp()
+        });
+
+        if (shouldWriteUserProfile) {
+          transaction.set(doc(usersRef, requestUserId), {
+            alias: nextUserAlias,
+            role: existingRole,
+            createdAt: existingCreatedAt,
+            lastSeenAt: serverTimestamp()
+          });
         }
       }
 
