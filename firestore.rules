@@ -52,19 +52,6 @@ service cloud.firestore {
       return status == 'pending' || status == 'approved' || status == 'rejected';
     }
 
-    function nameChangeRequestPath(appNamespace, membershipId) {
-      return /databases/$(database)/documents/apps/$(appNamespace)/nameChangeRequests/$(membershipId);
-    }
-
-    function canAdminApplyApprovedNameChange(appNamespace, membershipId, nextData) {
-      return existsAfter(nameChangeRequestPath(appNamespace, membershipId)) &&
-        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.status == 'approved' &&
-        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.uid == nextData.uid &&
-        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.campaignId == nextData.campaignId &&
-        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.requestedAlias == nextData.alias &&
-        getAfter(nameChangeRequestPath(appNamespace, membershipId)).data.reviewedByUid == request.auth.uid;
-    }
-
     function hasImmutableMembershipAlias(existingData, nextData) {
       return (
         existingData.alias is string &&
@@ -280,8 +267,7 @@ service cloud.firestore {
           ) ||
           (
             isAdmin(appNamespace, request.auth.uid) &&
-            hasValidAlias(request.resource.data.alias) &&
-            canAdminApplyApprovedNameChange(appNamespace, membershipId, request.resource.data)
+            hasValidAlias(request.resource.data.alias)
           )
         );
 

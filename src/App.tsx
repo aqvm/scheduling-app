@@ -97,10 +97,6 @@ function createUserAlias(userId: string): string {
   return `Player-${suffix}`;
 }
 
-function isGeneratedAlias(alias: string): boolean {
-  return /^Player-[A-Z0-9]{6}$/.test(alias);
-}
-
 export default function App() {
   const [authUserId, setAuthUserId] = useState('');
   const [authReady, setAuthReady] = useState(false);
@@ -1062,8 +1058,7 @@ export default function App() {
 
     const nameChangeRequestsRef = getNameChangeRequestsCollectionRef();
     const membershipsRef = getMembershipsCollectionRef();
-    const usersRef = getUsersCollectionRef();
-    if (!nameChangeRequestsRef || !membershipsRef || !usersRef) {
+    if (!nameChangeRequestsRef || !membershipsRef) {
       setManagementError('Firebase is not configured.');
       return;
     }
@@ -1124,32 +1119,6 @@ export default function App() {
         if (!joinedAt) {
           throw new Error('Campaign membership timestamp is invalid.');
         }
-        let shouldWriteUserProfile = false;
-        let nextUserAlias = '';
-        let existingRole: 'member' | 'admin' = 'member';
-        let existingCreatedAt: unknown = null;
-
-        if (requestUserId === currentUser.id) {
-          const userDocRef = doc(usersRef, requestUserId);
-          const userSnapshot = await transaction.get(userDocRef);
-          if (userSnapshot.exists()) {
-            const userValue = userSnapshot.data();
-            const existingRole = userValue.role;
-            const existingCreatedAt = userValue.createdAt;
-            const existingUserAlias =
-              typeof userValue.alias === 'string' ? normalizeName(userValue.alias) : '';
-
-            if (!isUserRole(existingRole) || !existingCreatedAt) {
-              throw new Error('User profile is invalid.');
-            }
-
-            nextUserAlias =
-              !existingUserAlias || isGeneratedAlias(existingUserAlias)
-                ? requestedAlias
-                : existingUserAlias;
-            shouldWriteUserProfile = true;
-          }
-        }
 
         transaction.set(membershipDocRef, {
           campaignId: requestCampaignId,
@@ -1158,15 +1127,6 @@ export default function App() {
           joinedAt,
           lastSeenAt: serverTimestamp()
         });
-
-        if (shouldWriteUserProfile) {
-          transaction.set(doc(usersRef, requestUserId), {
-            alias: nextUserAlias,
-            role: existingRole,
-            createdAt: existingCreatedAt,
-            lastSeenAt: serverTimestamp()
-          });
-        }
       }
 
       transaction.set(requestDocRef, {
