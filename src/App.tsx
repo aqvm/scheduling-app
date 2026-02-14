@@ -125,8 +125,11 @@ export default function App() {
   const [isUpdatingInvite, setIsUpdatingInvite] = useState(false);
   const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const [removingUserId, setRemovingUserId] = useState('');
-  const [joinDisplayNameInput, setJoinDisplayNameInput] = useState('');
-  const [joinInviteCode, setJoinInviteCode] = useState('');
+  const [isJoinCampaignDialogOpen, setIsJoinCampaignDialogOpen] = useState(false);
+  const [joinCampaignNameInput, setJoinCampaignNameInput] = useState('');
+  const [joinCampaignInviteInput, setJoinCampaignInviteInput] = useState('');
+  const [isNameChangeDialogOpen, setIsNameChangeDialogOpen] = useState(false);
+  const [nameChangeNameInput, setNameChangeNameInput] = useState('');
   const [isJoiningCampaign, setIsJoiningCampaign] = useState(false);
   const [isSubmittingNameChangeRequest, setIsSubmittingNameChangeRequest] = useState(false);
   const [processingNameChangeRequestId, setProcessingNameChangeRequestId] = useState('');
@@ -790,11 +793,11 @@ export default function App() {
       });
   };
 
-  const onJoinCampaign = (inviteCodeInput: string): void => {
+  const onJoinCampaign = (inviteCodeInput: string, nameInput: string): void => {
     const inviteCode = normalizeInviteCode(inviteCodeInput);
     const authUser = auth?.currentUser ?? null;
     const signedInUserId = authUser?.uid ?? authUserId;
-    const requestedAlias = normalizeName(joinDisplayNameInput);
+    const requestedAlias = normalizeName(nameInput);
 
     if (!signedInUserId) {
       setSignInError('Sign in with Google first.');
@@ -807,7 +810,7 @@ export default function App() {
     }
 
     if (requestedAlias.length > 64) {
-      setSignInError('Display name must be 64 characters or fewer.');
+      setSignInError('Name must be 64 characters or fewer.');
       return;
     }
 
@@ -885,8 +888,8 @@ export default function App() {
       if (!effectiveMembershipAlias) {
         throw new Error(
           hasExistingMembership
-            ? 'Membership display name is invalid.'
-            : 'Enter a display name before joining this campaign.'
+            ? 'Membership name is invalid.'
+            : 'Enter a name before joining this campaign.'
         );
       }
 
@@ -947,8 +950,9 @@ export default function App() {
           setSelectedCampaignId(inviteCampaignId);
         }
 
-        setJoinDisplayNameInput('');
-        setJoinInviteCode('');
+        setJoinCampaignNameInput('');
+        setJoinCampaignInviteInput('');
+        setIsJoinCampaignDialogOpen(false);
         setSignInError('');
         setNameChangeInfo('');
         setAppError('');
@@ -961,30 +965,30 @@ export default function App() {
       });
   };
 
-  const onRequestNameChange = (): void => {
+  const onRequestNameChange = (nameInput: string): void => {
     if (!currentUser || !selectedCampaignId) {
       setSignInError('Select a campaign before requesting a name change.');
       return;
     }
 
-    const requestedAlias = normalizeName(joinDisplayNameInput);
+    const requestedAlias = normalizeName(nameInput);
     if (!requestedAlias) {
-      setSignInError('Enter the display name you want to request.');
+      setSignInError('Enter the name you want to request.');
       return;
     }
 
     if (requestedAlias.length > 64) {
-      setSignInError('Display name must be 64 characters or fewer.');
+      setSignInError('Name must be 64 characters or fewer.');
       return;
     }
 
     if (!selectedMembershipAlias) {
-      setSignInError('Join this campaign before requesting a display name change.');
+      setSignInError('Join this campaign before requesting a name change.');
       return;
     }
 
     if (requestedAlias === selectedMembershipAlias) {
-      setSignInError('That is already your display name for this campaign.');
+      setSignInError('That is already your name for this campaign.');
       return;
     }
 
@@ -1036,7 +1040,8 @@ export default function App() {
       });
     })
       .then(() => {
-        setJoinDisplayNameInput('');
+        setNameChangeNameInput('');
+        setIsNameChangeDialogOpen(false);
         setNameChangeInfo('Name change request submitted for admin approval.');
       })
       .catch((error: unknown) => {
@@ -1541,8 +1546,11 @@ export default function App() {
     setCampaignUsers([]);
     setCampaignAvailability({});
     setHostUserId('');
-    setJoinDisplayNameInput('');
-    setJoinInviteCode('');
+    setIsJoinCampaignDialogOpen(false);
+    setJoinCampaignNameInput('');
+    setJoinCampaignInviteInput('');
+    setIsNameChangeDialogOpen(false);
+    setNameChangeNameInput('');
     setIsJoiningCampaign(false);
     setIsSubmittingNameChangeRequest(false);
     setProcessingNameChangeRequestId('');
@@ -1637,73 +1645,154 @@ export default function App() {
     </label>
   );
 
-  const joinCampaignControl = (
-    <form
-      className="join-campaign-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onJoinCampaign(joinInviteCode);
-      }}
-    >
-      <label className="month-picker" htmlFor="join-display-name-input">
-        Display Name
-        <input
-          id="join-display-name-input"
-          type="text"
-          value={joinDisplayNameInput}
-          onChange={(event) => {
-            setJoinDisplayNameInput(event.target.value);
-            if (signInError) {
-              setSignInError('');
-            }
-            if (nameChangeInfo) {
-              setNameChangeInfo('');
-            }
-          }}
-          autoComplete="nickname"
-          spellCheck={false}
-          placeholder={selectedMembershipAlias || 'Name for this campaign'}
-          maxLength={64}
-        />
-      </label>
-      <label className="month-picker" htmlFor="join-campaign-code-input">
+  const onOpenJoinCampaignDialog = (): void => {
+    setSignInError('');
+    setNameChangeInfo('');
+    setJoinCampaignNameInput(selectedMembershipAlias || displayAlias || '');
+    setJoinCampaignInviteInput('');
+    setIsJoinCampaignDialogOpen(true);
+  };
+
+  const onOpenNameChangeDialog = (): void => {
+    setSignInError('');
+    setNameChangeInfo('');
+    setNameChangeNameInput('');
+    setIsNameChangeDialogOpen(true);
+  };
+
+  const headerActionButtons = (
+    <div className="header-action-buttons">
+      <button type="button" className="primary-button" onClick={onOpenJoinCampaignDialog}>
         Join Campaign
-        <input
-          id="join-campaign-code-input"
-          type="text"
-          value={joinInviteCode}
-          onChange={(event) => {
-            setJoinInviteCode(event.target.value);
-            if (signInError) {
-              setSignInError('');
-            }
-          }}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="XXXX-XXXX-XXXX"
-          maxLength={32}
-        />
-      </label>
-      <button type="submit" className="primary-button" disabled={isJoiningCampaign}>
-        {isJoiningCampaign ? 'Joining...' : 'Join'}
       </button>
       {currentUser ? (
         <button
           type="button"
           className="ghost-button"
-          disabled={
-            isSubmittingNameChangeRequest ||
-            !selectedCampaignId ||
-            !selectedMembershipAlias ||
-            normalizeName(joinDisplayNameInput).length === 0
-          }
-          onClick={onRequestNameChange}
+          disabled={isSubmittingNameChangeRequest || !selectedCampaignId || !selectedMembershipAlias}
+          onClick={onOpenNameChangeDialog}
         >
-          {isSubmittingNameChangeRequest ? 'Requesting...' : 'Request Name Change'}
+          Request Name Change
         </button>
       ) : null}
-    </form>
+    </div>
   );
+
+  const joinCampaignDialog = isJoinCampaignDialogOpen ? (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-campaign-title">
+        <h2 id="join-campaign-title">Join Campaign</h2>
+        <form
+          className="modal-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onJoinCampaign(joinCampaignInviteInput, joinCampaignNameInput);
+          }}
+        >
+          <label className="month-picker" htmlFor="join-campaign-name-input">
+            Name
+            <input
+              id="join-campaign-name-input"
+              type="text"
+              value={joinCampaignNameInput}
+              onChange={(event) => {
+                setJoinCampaignNameInput(event.target.value);
+                if (signInError) {
+                  setSignInError('');
+                }
+              }}
+              autoComplete="nickname"
+              spellCheck={false}
+              placeholder={selectedMembershipAlias || 'Name for this campaign'}
+              maxLength={64}
+            />
+          </label>
+          <label className="month-picker" htmlFor="join-campaign-code-input">
+            Join Campaign
+            <input
+              id="join-campaign-code-input"
+              type="text"
+              value={joinCampaignInviteInput}
+              onChange={(event) => {
+                setJoinCampaignInviteInput(event.target.value);
+                if (signInError) {
+                  setSignInError('');
+                }
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="XXXX-XXXX-XXXX"
+              maxLength={32}
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="submit" className="primary-button" disabled={isJoiningCampaign}>
+              {isJoiningCampaign ? 'Joining...' : 'Join Campaign'}
+            </button>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => setIsJoinCampaignDialogOpen(false)}
+              disabled={isJoiningCampaign}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  ) : null;
+
+  const nameChangeDialog =
+    isNameChangeDialogOpen && currentUser ? (
+      <div className="modal-backdrop" role="presentation">
+        <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="name-change-title">
+          <h2 id="name-change-title">Request Name Change</h2>
+          <form
+            className="modal-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onRequestNameChange(nameChangeNameInput);
+            }}
+          >
+            <label className="month-picker" htmlFor="name-change-name-input">
+              New Name
+              <input
+                id="name-change-name-input"
+                type="text"
+                value={nameChangeNameInput}
+                onChange={(event) => {
+                  setNameChangeNameInput(event.target.value);
+                  if (signInError) {
+                    setSignInError('');
+                  }
+                  if (nameChangeInfo) {
+                    setNameChangeInfo('');
+                  }
+                }}
+                autoComplete="nickname"
+                spellCheck={false}
+                placeholder="Your requested name"
+                maxLength={64}
+              />
+            </label>
+            <div className="modal-actions">
+              <button type="submit" className="primary-button" disabled={isSubmittingNameChangeRequest}>
+                {isSubmittingNameChangeRequest ? 'Requesting...' : 'Submit Request'}
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setIsNameChangeDialogOpen(false)}
+                disabled={isSubmittingNameChangeRequest}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    ) : null;
 
   const activeNameChangeRequestNote =
     activeNameChangeRequest && activeNameChangeRequest.campaignId === selectedCampaignId
@@ -1722,7 +1811,7 @@ export default function App() {
           <p>Signed in with Google. Join a campaign to continue.</p>
           <div className="header-controls">
             {campaignSelectionControl}
-            {joinCampaignControl}
+            {headerActionButtons}
             <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
               Sign Out
             </button>
@@ -1733,9 +1822,10 @@ export default function App() {
         <main>
           <section className="page-card">
             <h2>Join a Campaign</h2>
-            <p>Use the invite code field above to join your first or next campaign.</p>
+            <p>Click Join Campaign above and submit your campaign invite code.</p>
           </section>
         </main>
+        {joinCampaignDialog}
       </div>
     );
   }
@@ -1777,7 +1867,7 @@ export default function App() {
         </p>
         <div className="header-controls">
           {campaignSelectionControl}
-          {joinCampaignControl}
+          {headerActionButtons}
           <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
             Sign Out
           </button>
@@ -1863,6 +1953,8 @@ export default function App() {
           />
         </Routes>
       </main>
+      {joinCampaignDialog}
+      {nameChangeDialog}
     </div>
   );
 }
