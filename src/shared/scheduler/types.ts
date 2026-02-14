@@ -25,15 +25,35 @@ export type UserProfile = {
 };
 
 /**
- * An invite document stored under `apps/{campaignId}/campaignInvites/{code}`.
+ * A campaign document stored under `apps/{namespace}/campaigns/{campaignId}`.
+ */
+export type Campaign = {
+  id: string;
+  name: string;
+  inviteCode: string;
+  inviteEnabled: boolean;
+  createdByUid: string;
+};
+
+/**
+ * A membership document stored under `apps/{namespace}/memberships/{campaignId_uid}`.
+ */
+export type CampaignMembership = {
+  id: string;
+  campaignId: string;
+  userId: string;
+  name: string;
+  email: string;
+};
+
+/**
+ * An invite document stored under `apps/{namespace}/campaignInvites/{code}`.
  */
 export type CampaignInvite = {
   code: string;
   campaignId: string;
-  role: UserRole;
+  enabled: boolean;
   createdByUid: string;
-  redeemedByUid: string;
-  revoked: boolean;
 };
 
 /**

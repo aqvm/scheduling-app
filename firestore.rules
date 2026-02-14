@@ -9,6 +9,15 @@ service cloud.firestore {
       return role == 'member' || role == 'admin';
     }
 
+    function membershipDocId(campaignId, uid) {
+      return campaignId + '_' + uid;
+    }
+
+    function isCampaignMember(appNamespace, campaignId, uid) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(campaignId, uid)));
+    }
+
     function isAdmin(appNamespace, uid) {
       return signedIn() &&
         exists(/databases/$(database)/documents/apps/$(appNamespace)/users/$(uid)) &&
@@ -28,7 +37,6 @@ service cloud.firestore {
         request.resource.data.createdAt is timestamp &&
         validUserRole(request.resource.data.role);
 
-      // Only permit mutable profile fields from clients.
       allow update: if signedIn() &&
         request.auth.uid == userId &&
         request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'lastSeenAt']) &&
@@ -42,14 +50,32 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Admin-controlled role assignment path (or replace with Cloud Functions).
-    match /apps/{appNamespace}/adminRoleAssignments/{userId} {
-      allow read: if signedIn() && isAdmin(appNamespace, request.auth.uid);
-      allow create, update: if signedIn() &&
+    match /apps/{appNamespace}/campaigns/{campaignId} {
+      allow read: if signedIn() &&
+        (isAdmin(appNamespace, request.auth.uid) || isCampaignMember(appNamespace, campaignId, request.auth.uid));
+
+      allow create: if signedIn() &&
         isAdmin(appNamespace, request.auth.uid) &&
-        request.resource.data.keys().hasOnly(['role', 'updatedAt']) &&
-        validUserRole(request.resource.data.role) &&
+        request.resource.data.keys().hasOnly(['name', 'inviteCode', 'inviteEnabled', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.inviteCode is string &&
+        request.resource.data.inviteCode.size() > 0 &&
+        request.resource.data.inviteEnabled == true &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.createdAt is timestamp &&
         request.resource.data.updatedAt is timestamp;
+
+      allow update: if signedIn() &&
+        isAdmin(appNamespace, request.auth.uid) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['inviteEnabled', 'updatedAt']) &&
+        request.resource.data.inviteEnabled is bool &&
+        request.resource.data.updatedAt is timestamp &&
+        request.resource.data.name == resource.data.name &&
+        request.resource.data.inviteCode == resource.data.inviteCode &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt;
+
       allow delete: if false;
     }
 
@@ -59,51 +85,102 @@ service cloud.firestore {
 
       allow create: if signedIn() &&
         isAdmin(appNamespace, request.auth.uid) &&
-        request.resource.data.keys().hasOnly(['campaignId', 'role', 'createdByUid', 'createdAt', 'revoked', 'redeemedByUid']) &&
+        request.resource.data.keys().hasOnly(['campaignId', 'enabled', 'createdByUid', 'createdAt', 'updatedAt']) &&
         request.resource.data.campaignId is string &&
         request.resource.data.campaignId.size() > 0 &&
-        request.resource.data.campaignId == appNamespace &&
-        validUserRole(request.resource.data.role) &&
+        request.resource.data.enabled == true &&
         request.resource.data.createdByUid == request.auth.uid &&
         request.resource.data.createdAt is timestamp &&
-        request.resource.data.revoked == false &&
-        request.resource.data.redeemedByUid == '';
+        request.resource.data.updatedAt is timestamp;
 
-      // Admin can revoke invites.
       allow update: if signedIn() &&
         isAdmin(appNamespace, request.auth.uid) &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['revoked']) &&
-        request.resource.data.revoked == true &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['enabled', 'updatedAt']) &&
+        request.resource.data.enabled is bool &&
+        request.resource.data.updatedAt is timestamp &&
         request.resource.data.campaignId == resource.data.campaignId &&
-        request.resource.data.role == resource.data.role &&
         request.resource.data.createdByUid == resource.data.createdByUid &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.redeemedByUid == resource.data.redeemedByUid;
+        request.resource.data.createdAt == resource.data.createdAt;
 
-      // Invite holder can redeem a valid invite once.
+      allow delete: if false;
+    }
+
+    match /apps/{appNamespace}/memberships/{membershipId} {
+      allow read: if signedIn() &&
+        (
+          isAdmin(appNamespace, request.auth.uid) ||
+          resource.data.uid == request.auth.uid ||
+          isCampaignMember(appNamespace, resource.data.campaignId, request.auth.uid)
+        );
+
+      allow create: if signedIn() &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'name', 'email', 'joinedAt', 'lastSeenAt']) &&
+        request.resource.data.campaignId is string &&
+        request.resource.data.campaignId.size() > 0 &&
+        request.resource.data.uid == request.auth.uid &&
+        membershipId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() > 0 &&
+        request.resource.data.joinedAt is timestamp &&
+        request.resource.data.lastSeenAt is timestamp &&
+        (
+          isAdmin(appNamespace, request.auth.uid) ||
+          (
+            exists(/databases/$(database)/documents/apps/$(appNamespace)/campaigns/$(request.resource.data.campaignId)) &&
+            get(/databases/$(database)/documents/apps/$(appNamespace)/campaigns/$(request.resource.data.campaignId)).data.inviteEnabled == true
+          )
+        );
+
       allow update: if signedIn() &&
-        resource.data.revoked == false &&
-        resource.data.redeemedByUid == '' &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['redeemedByUid']) &&
-        request.resource.data.redeemedByUid == request.auth.uid &&
+        request.auth.uid == resource.data.uid &&
+        membershipId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'joinedAt', 'lastSeenAt']) &&
         request.resource.data.campaignId == resource.data.campaignId &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.createdByUid == resource.data.createdByUid &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.revoked == resource.data.revoked;
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() > 0 &&
+        request.resource.data.joinedAt is timestamp &&
+        request.resource.data.lastSeenAt is timestamp;
 
-      allow delete: if false;
+      allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);
     }
 
-    match /apps/{appNamespace}/availability/{userId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && request.auth.uid == userId;
-      allow delete: if false;
+    match /apps/{appNamespace}/availability/{entryId} {
+      allow read: if signedIn() &&
+        (
+          isAdmin(appNamespace, request.auth.uid) ||
+          resource.data.uid == request.auth.uid ||
+          isCampaignMember(appNamespace, resource.data.campaignId, request.auth.uid)
+        );
+
+      allow create, update: if signedIn() &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'days', 'updatedAt']) &&
+        request.resource.data.campaignId is string &&
+        request.resource.data.campaignId.size() > 0 &&
+        request.resource.data.uid == request.auth.uid &&
+        entryId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
+        exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(request.resource.data.campaignId, request.auth.uid))) &&
+        request.resource.data.days is map &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if signedIn() &&
+        (isAdmin(appNamespace, request.auth.uid) || resource.data.uid == request.auth.uid);
     }
 
-    match /apps/{appNamespace}/meta/settings {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && isAdmin(appNamespace, request.auth.uid);
+    match /apps/{appNamespace}/campaignSettings/{campaignId} {
+      allow read: if signedIn() &&
+        (isAdmin(appNamespace, request.auth.uid) || isCampaignMember(appNamespace, campaignId, request.auth.uid));
+
+      allow create, update: if signedIn() &&
+        isAdmin(appNamespace, request.auth.uid) &&
+        request.resource.data.keys().hasOnly(['hostUserId', 'updatedAt']) &&
+        request.resource.data.hostUserId is string &&
+        request.resource.data.updatedAt is timestamp;
+
       allow delete: if false;
     }
   }

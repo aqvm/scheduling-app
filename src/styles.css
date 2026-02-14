@@ -49,6 +49,14 @@ select {
   justify-self: start;
 }
 
+.header-controls {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 1.1rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
 .top-nav {
   display: flex;
   gap: 0.9rem;
@@ -191,7 +199,8 @@ select {
   color: #bdd0e7;
 }
 
-.month-picker select {
+.month-picker select,
+.month-picker input {
   border: 1px solid rgba(120, 144, 171, 0.52);
   border-radius: 0.55rem;
   padding: 0.42rem 0.56rem;

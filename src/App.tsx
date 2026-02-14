@@ -7,109 +7,77 @@ import { AdminManagementPage } from './features/admin/AdminManagementPage';
 import { SignInPage } from './features/auth/SignInPage';
 import { PersonalAvailabilityPage } from './features/availability/PersonalAvailabilityPage';
 import { HostSummaryPage } from './features/host/HostSummaryPage';
-import {
-  APP_NAMESPACE,
-  LEGACY_ADMIN_INVITE_CODE,
-  LEGACY_MEMBER_INVITE_CODE
-} from './shared/scheduler/constants';
+import { LEGACY_ADMIN_INVITE_CODE, LEGACY_MEMBER_INVITE_CODE } from './shared/scheduler/constants';
 import { getMonthDates, isValidMonthValue, toDateKey, toMonthValue } from './shared/scheduler/date';
 import {
   getAvailabilityCollectionRef,
   getCampaignInvitesCollectionRef,
-  getSettingsDocumentRef,
+  getCampaignSettingsCollectionRef,
+  getCampaignSettingsDocumentRef,
+  getCampaignsCollectionRef,
+  getMembershipsCollectionRef,
   getUsersCollectionRef
 } from './shared/scheduler/firebaseRefs';
 import { createInviteCode } from './shared/scheduler/invite';
 import {
-  INITIAL_PERSISTED_STATE,
   type AvailabilityByUser,
   type AvailabilityStatus,
-  type CampaignInvite,
-  type PendingEditsByUser,
-  type PersistedState,
+  type Campaign,
+  type CampaignMembership,
+  type UserProfile,
   type UserRole
 } from './shared/scheduler/types';
 import { isAvailabilityStatus, isUserRole, normalizeInviteCode, normalizeName } from './shared/scheduler/validation';
 
-/**
- * Root application component.
- *
- * Responsibilities:
- * - coordinate auth and Firestore subscriptions
- * - manage local unsaved calendar edits
- * - expose action handlers to feature pages
- * - route between availability, host, and admin views
- */
+const MAX_INVITE_CREATE_ATTEMPTS = 6;
+
+function membershipDocumentId(campaignId: string, userId: string): string {
+  return `${campaignId}_${userId}`;
+}
+
 export default function App() {
-  /**
-   * Snapshot-backed campaign state.
-   */
-  const [state, setState] = useState<PersistedState>(INITIAL_PERSISTED_STATE);
-
-  /**
-   * Local unsaved edits per user/day.
-   */
-  const [pendingEdits, setPendingEdits] = useState<PendingEditsByUser>({});
-
-  /**
-   * `authUserId` tracks current Firebase Auth session.
-   * `sessionUserId` tracks app-level signed-in profile after invite validation.
-   */
   const [authUserId, setAuthUserId] = useState('');
   const [sessionUserId, setSessionUserId] = useState('');
-
-  /**
-   * Readiness flags used for loading states.
-   */
   const [authReady, setAuthReady] = useState(false);
-  const [dataReady, setDataReady] = useState(false);
+  const [profileReady, setProfileReady] = useState(false);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
-  /**
-   * Calendar UI controls.
-   */
+  const [memberships, setMemberships] = useState<CampaignMembership[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState('');
+  const [campaignUsers, setCampaignUsers] = useState<UserProfile[]>([]);
+  const [campaignAvailability, setCampaignAvailability] = useState<AvailabilityByUser>({});
+  const [hostUserId, setHostUserId] = useState('');
+
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toMonthValue(new Date()));
   const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
-
-  /**
-   * Request and interaction flags.
-   */
-  const [isSavingChanges, setIsSavingChanges] = useState(false);
+  const [pendingEditsByCampaign, setPendingEditsByCampaign] = useState<Record<string, Record<string, AvailabilityStatus>>>({});
   const [isPainting, setIsPainting] = useState(false);
+  const [isSavingChanges, setIsSavingChanges] = useState(false);
+
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
-  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
-
-  /**
-   * Admin invite state.
-   */
-  const [invites, setInvites] = useState<CampaignInvite[]>([]);
-  const [latestInviteCode, setLatestInviteCode] = useState('');
-  const [inviteError, setInviteError] = useState('');
-
-  /**
-   * UI errors surfaced to users.
-   */
+  const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
+  const [isUpdatingInvite, setIsUpdatingInvite] = useState(false);
+  const [removingUserId, setRemovingUserId] = useState('');
   const [signInError, setSignInError] = useState('');
   const [appError, setAppError] = useState('');
+  const [managementError, setManagementError] = useState('');
 
-  /**
-   * Derived identity and view permissions.
-   */
-  const currentUser = state.users.find((user) => user.id === sessionUserId) ?? null;
-  const hostUser = state.users.find((user) => user.id === state.hostUserId) ?? null;
+  const currentUser =
+    userProfile && sessionUserId && userProfile.id === sessionUserId ? userProfile : null;
+  const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null;
+  const hostUser = campaignUsers.find((user) => user.id === hostUserId) ?? null;
   const canViewHostSummary =
-    currentUser !== null && (currentUser.role === 'admin' || currentUser.id === state.hostUserId);
+    currentUser !== null &&
+    selectedCampaign !== null &&
+    (currentUser.role === 'admin' || currentUser.id === hostUserId);
 
-  /**
-   * Derived edit/read models for current month.
-   */
-  const currentUserPendingEdits = currentUser ? pendingEdits[currentUser.id] ?? {} : {};
-  const hasUnsavedChanges = Object.keys(currentUserPendingEdits).length > 0;
+  const currentCampaignPendingEdits =
+    selectedCampaignId.length > 0 ? pendingEditsByCampaign[selectedCampaignId] ?? {} : {};
+  const hasUnsavedChanges = Object.keys(currentCampaignPendingEdits).length > 0;
   const monthDates = useMemo(() => getMonthDates(selectedMonth), [selectedMonth]);
   const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
 
-  /**
-   * Listen to Firebase Auth session changes.
-   */
   useEffect(() => {
     if (!auth) {
       setAuthReady(true);
@@ -119,6 +87,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAuthUserId(user.uid);
+        setSessionUserId('');
         setAuthReady(true);
         return;
       }
@@ -131,93 +100,285 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  /**
-   * Subscribe to campaign datasets once auth is ready.
-   * We intentionally gate `dataReady` until all three snapshot streams report once.
-   */
   useEffect(() => {
     if (!db || !authReady) {
       if (!db) {
-        setDataReady(true);
+        setProfileReady(true);
       }
 
       return;
     }
 
     if (!authUserId) {
-      setState(INITIAL_PERSISTED_STATE);
-      setDataReady(true);
+      setUserProfile(null);
+      setProfileReady(true);
       return;
     }
 
     const usersRef = getUsersCollectionRef();
-    const availabilityRef = getAvailabilityCollectionRef();
-    const settingsRef = getSettingsDocumentRef();
-
-    if (!usersRef || !availabilityRef || !settingsRef) {
-      setDataReady(true);
+    if (!usersRef) {
+      setUserProfile(null);
+      setProfileReady(true);
       return;
     }
 
-    setDataReady(false);
+    setProfileReady(false);
 
-    let usersLoaded = false;
-    let availabilityLoaded = false;
-    let settingsLoaded = false;
+    const unsubscribe = onSnapshot(
+      doc(usersRef, authUserId),
+      (docSnapshot) => {
+        if (!docSnapshot.exists()) {
+          setUserProfile(null);
+          setProfileReady(true);
+          return;
+        }
 
-    const maybeMarkReady = (): void => {
-      if (usersLoaded && availabilityLoaded && settingsLoaded) {
-        setDataReady(true);
-      }
-    };
+        const value = docSnapshot.data();
+        const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+        const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+        const role = value.role;
 
-    const unsubscribeUsers = onSnapshot(
-      usersRef,
-      (snapshot) => {
-        const users = snapshot.docs
-          .map((docSnapshot) => {
-            const value = docSnapshot.data();
-            const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
-            const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
-            const role = value.role;
+        if (!name || !isUserRole(role)) {
+          setUserProfile(null);
+          setProfileReady(true);
+          return;
+        }
 
-            if (!name || !isUserRole(role)) {
-              return null;
-            }
-
-            return {
-              id: docSnapshot.id,
-              name,
-              role,
-              email
-            };
-          })
-          .filter((user): user is NonNullable<typeof user> => user !== null);
-
-        setState((current) => ({
-          ...current,
-          users: users.sort((left, right) => left.name.localeCompare(right.name))
-        }));
-        usersLoaded = true;
-        maybeMarkReady();
+        setUserProfile({
+          id: docSnapshot.id,
+          name,
+          role,
+          email
+        });
+        setProfileReady(true);
       },
       () => {
-        usersLoaded = true;
-        maybeMarkReady();
+        setUserProfile(null);
+        setProfileReady(true);
       }
     );
 
-    const unsubscribeAvailability = onSnapshot(
+    return () => unsubscribe();
+  }, [authReady, authUserId]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setMemberships([]);
+      return;
+    }
+
+    const membershipsRef = getMembershipsCollectionRef();
+    if (!membershipsRef) {
+      setMemberships([]);
+      return;
+    }
+
+    const membershipsQuery = query(
+      membershipsRef,
+      where('uid', '==', currentUser.id),
+      limit(500)
+    );
+
+    const unsubscribe = onSnapshot(
+      membershipsQuery,
+      (snapshot) => {
+        const nextMemberships: CampaignMembership[] = [];
+
+        snapshot.forEach((docSnapshot) => {
+          const value = docSnapshot.data();
+          const campaignId = typeof value.campaignId === 'string' ? value.campaignId : '';
+          const userId = typeof value.uid === 'string' ? value.uid : '';
+          const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+          const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+
+          if (!campaignId || !userId || !name) {
+            return;
+          }
+
+          nextMemberships.push({
+            id: docSnapshot.id,
+            campaignId,
+            userId,
+            name,
+            email
+          });
+        });
+
+        nextMemberships.sort((left, right) => left.campaignId.localeCompare(right.campaignId));
+        setMemberships(nextMemberships);
+      },
+      () => {
+        setMemberships([]);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setCampaigns([]);
+      return;
+    }
+
+    const campaignsRef = getCampaignsCollectionRef();
+    if (!campaignsRef) {
+      setCampaigns([]);
+      return;
+    }
+
+    const campaignIds = [...new Set(memberships.map((membership) => membership.campaignId))];
+    if (campaignIds.length === 0) {
+      setCampaigns([]);
+      return;
+    }
+
+    const campaignsById = new Map<string, Campaign>();
+    setCampaigns([]);
+
+    const unsubscribers = campaignIds.map((campaignId) =>
+      onSnapshot(
+        doc(campaignsRef, campaignId),
+        (docSnapshot) => {
+          if (!docSnapshot.exists()) {
+            campaignsById.delete(campaignId);
+          } else {
+            const value = docSnapshot.data();
+            const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+            const inviteCode =
+              typeof value.inviteCode === 'string' ? normalizeInviteCode(value.inviteCode) : '';
+            const inviteEnabled = value.inviteEnabled === true;
+            const createdByUid =
+              typeof value.createdByUid === 'string' ? value.createdByUid : '';
+
+            if (!name || !inviteCode || !createdByUid) {
+              campaignsById.delete(campaignId);
+            } else {
+              campaignsById.set(campaignId, {
+                id: campaignId,
+                name,
+                inviteCode,
+                inviteEnabled,
+                createdByUid
+              });
+            }
+          }
+
+          setCampaigns(
+            [...campaignsById.values()].sort((left, right) => left.name.localeCompare(right.name))
+          );
+        },
+        () => {
+          campaignsById.delete(campaignId);
+          setCampaigns(
+            [...campaignsById.values()].sort((left, right) => left.name.localeCompare(right.name))
+          );
+        }
+      )
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [currentUser, memberships]);
+
+  useEffect(() => {
+    if (campaigns.length === 0) {
+      setSelectedCampaignId('');
+      return;
+    }
+
+    if (!campaigns.some((campaign) => campaign.id === selectedCampaignId)) {
+      setSelectedCampaignId(campaigns[0].id);
+    }
+  }, [campaigns, selectedCampaignId]);
+
+  useEffect(() => {
+    if (!selectedCampaignId) {
+      setCampaignUsers([]);
+      return;
+    }
+
+    const membershipsRef = getMembershipsCollectionRef();
+    if (!membershipsRef) {
+      setCampaignUsers([]);
+      return;
+    }
+
+    const campaignUsersQuery = query(
+      membershipsRef,
+      where('campaignId', '==', selectedCampaignId),
+      limit(500)
+    );
+
+    const unsubscribe = onSnapshot(
+      campaignUsersQuery,
+      (snapshot) => {
+        const users: UserProfile[] = [];
+
+        snapshot.forEach((docSnapshot) => {
+          const value = docSnapshot.data();
+          const userId = typeof value.uid === 'string' ? value.uid : '';
+          const name = typeof value.name === 'string' ? normalizeName(value.name) : '';
+          const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+
+          if (!userId || !name) {
+            return;
+          }
+
+          users.push({
+            id: userId,
+            name,
+            email,
+            role: 'member'
+          });
+        });
+
+        users.sort((left, right) => left.name.localeCompare(right.name));
+        setCampaignUsers(users);
+      },
+      () => {
+        setCampaignUsers([]);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [selectedCampaignId]);
+
+  useEffect(() => {
+    if (!selectedCampaignId) {
+      setCampaignAvailability({});
+      return;
+    }
+
+    const availabilityRef = getAvailabilityCollectionRef();
+    if (!availabilityRef) {
+      setCampaignAvailability({});
+      return;
+    }
+
+    const availabilityQuery = query(
       availabilityRef,
+      where('campaignId', '==', selectedCampaignId),
+      limit(1000)
+    );
+
+    const unsubscribe = onSnapshot(
+      availabilityQuery,
       (snapshot) => {
         const availability: AvailabilityByUser = {};
 
         snapshot.forEach((docSnapshot) => {
           const raw = docSnapshot.data();
           const daysRaw = raw.days;
+          const userId = typeof raw.uid === 'string' ? raw.uid : '';
+
+          if (!userId) {
+            return;
+          }
 
           if (!daysRaw || typeof daysRaw !== 'object') {
-            availability[docSnapshot.id] = {};
+            availability[userId] = {};
             return;
           }
 
@@ -228,141 +389,63 @@ export default function App() {
             }
           }
 
-          availability[docSnapshot.id] = days;
+          availability[userId] = days;
         });
 
-        setState((current) => ({
-          ...current,
-          availability
-        }));
-        availabilityLoaded = true;
-        maybeMarkReady();
+        setCampaignAvailability(availability);
       },
       () => {
-        availabilityLoaded = true;
-        maybeMarkReady();
-      }
-    );
-
-    const unsubscribeSettings = onSnapshot(
-      settingsRef,
-      (docSnapshot) => {
-        const value = docSnapshot.data();
-        const hostUserId = typeof value?.hostUserId === 'string' ? value.hostUserId : '';
-
-        setState((current) => ({
-          ...current,
-          hostUserId
-        }));
-        settingsLoaded = true;
-        maybeMarkReady();
-      },
-      () => {
-        settingsLoaded = true;
-        maybeMarkReady();
-      }
-    );
-
-    return () => {
-      unsubscribeUsers();
-      unsubscribeAvailability();
-      unsubscribeSettings();
-    };
-  }, [authReady, authUserId]);
-
-  /**
-   * Auto-establish app session when auth user already exists in campaign users.
-   */
-  useEffect(() => {
-    if (!authUserId) {
-      setSessionUserId('');
-      return;
-    }
-
-    if (state.users.some((user) => user.id === authUserId)) {
-      setSessionUserId(authUserId);
-    }
-  }, [authUserId, state.users]);
-
-  /**
-   * Subscribe admin users to invite documents.
-   */
-  useEffect(() => {
-    if (!currentUser || currentUser.role !== 'admin') {
-      setInvites([]);
-      return;
-    }
-
-    const invitesRef = getCampaignInvitesCollectionRef();
-    if (!invitesRef) {
-      setInvites([]);
-      return;
-    }
-
-    const invitesQuery = query(invitesRef, where('campaignId', '==', APP_NAMESPACE), limit(100));
-    const unsubscribe = onSnapshot(
-      invitesQuery,
-      (snapshot) => {
-        const nextInvites: CampaignInvite[] = [];
-
-        snapshot.forEach((docSnapshot) => {
-          const value = docSnapshot.data();
-          const campaignId = typeof value.campaignId === 'string' ? value.campaignId : '';
-          const role = value.role;
-          const createdByUid = typeof value.createdByUid === 'string' ? value.createdByUid : '';
-          const redeemedByUid = typeof value.redeemedByUid === 'string' ? value.redeemedByUid : '';
-          const revoked = value.revoked === true;
-
-          if (!campaignId || !createdByUid || !isUserRole(role)) {
-            return;
-          }
-
-          nextInvites.push({
-            code: docSnapshot.id,
-            campaignId,
-            role,
-            createdByUid,
-            redeemedByUid,
-            revoked
-          });
-        });
-
-        nextInvites.sort((left, right) => right.code.localeCompare(left.code));
-        setInvites(nextInvites);
-      },
-      () => {
-        setInvites([]);
+        setCampaignAvailability({});
       }
     );
 
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [selectedCampaignId]);
 
-  /**
-   * End drag-paint mode on global mouse release.
-   */
+  useEffect(() => {
+    if (!selectedCampaignId) {
+      setHostUserId('');
+      return;
+    }
+
+    const settingsDocRef = getCampaignSettingsDocumentRef(selectedCampaignId);
+    if (!settingsDocRef) {
+      setHostUserId('');
+      return;
+    }
+
+    const unsubscribe = onSnapshot(
+      settingsDocRef,
+      (docSnapshot) => {
+        const value = docSnapshot.data();
+        const nextHostUserId = typeof value?.hostUserId === 'string' ? value.hostUserId : '';
+        setHostUserId(nextHostUserId);
+      },
+      () => {
+        setHostUserId('');
+      }
+    );
+
+    return () => unsubscribe();
+  }, [selectedCampaignId]);
+
   useEffect(() => {
     const onMouseUp = () => setIsPainting(false);
     window.addEventListener('mouseup', onMouseUp);
     return () => window.removeEventListener('mouseup', onMouseUp);
   }, []);
 
-  /**
-   * Reconcile pending edits whenever server state updates.
-   * If the server already matches a pending value, we remove that pending entry.
-   */
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !selectedCampaignId) {
       return;
     }
 
-    const userId = currentUser.id;
-    const userPending = pendingEdits[userId];
+    const userPending = pendingEditsByCampaign[selectedCampaignId];
     if (!userPending || Object.keys(userPending).length === 0) {
       return;
     }
 
-    const userServerDays = state.availability[userId] ?? {};
+    const userServerDays = campaignAvailability[currentUser.id] ?? {};
     const nextPending: Record<string, AvailabilityStatus> = {};
 
     for (const [dateKey, status] of Object.entries(userPending)) {
@@ -382,89 +465,65 @@ export default function App() {
       return;
     }
 
-    setPendingEdits((current) => {
+    setPendingEditsByCampaign((current) => {
       if (Object.keys(nextPending).length === 0) {
-        const { [userId]: _removed, ...rest } = current;
+        const { [selectedCampaignId]: _removed, ...rest } = current;
         return rest;
       }
 
       return {
         ...current,
-        [userId]: nextPending
+        [selectedCampaignId]: nextPending
       };
     });
-  }, [currentUser, pendingEdits, state.availability]);
+  }, [campaignAvailability, currentUser, pendingEditsByCampaign, selectedCampaignId]);
 
-  /**
-   * Initialize host to first known user when no host is set yet.
-   */
-  useEffect(() => {
-    const settingsRef = getSettingsDocumentRef();
-    if (!settingsRef || state.users.length === 0 || state.hostUserId) {
-      return;
-    }
-
-    void setDoc(settingsRef, { hostUserId: state.users[0].id, updatedAt: serverTimestamp() }, { merge: true });
-  }, [state.users, state.hostUserId]);
-
-  /**
-   * Returns effective status for rendering: pending edit overrides persisted value.
-   */
   const getStatus = (userId: string, dateKey: string): AvailabilityStatus => {
-    const pendingStatus = pendingEdits[userId]?.[dateKey];
-    if (pendingStatus) {
-      return pendingStatus;
+    if (currentUser && selectedCampaignId && userId === currentUser.id) {
+      const pendingStatus = pendingEditsByCampaign[selectedCampaignId]?.[dateKey];
+      if (pendingStatus) {
+        return pendingStatus;
+      }
     }
 
-    return state.availability[userId]?.[dateKey] ?? 'unspecified';
+    return campaignAvailability[userId]?.[dateKey] ?? 'unspecified';
   };
 
-  /**
-   * Updates local pending edits for one date.
-   */
   const paintDate = (dateKey: string): void => {
-    if (!currentUser) {
+    if (!currentUser || !selectedCampaignId) {
       return;
     }
 
-    const currentUserId = currentUser.id;
-    const serverStatus = state.availability[currentUserId]?.[dateKey] ?? 'unspecified';
+    const serverStatus = campaignAvailability[currentUser.id]?.[dateKey] ?? 'unspecified';
     const nextStatus = selectedPaintStatus;
 
-    setPendingEdits((current) => {
-      const userPending = current[currentUserId] ?? {};
-      const nextPending = { ...userPending };
+    setPendingEditsByCampaign((current) => {
+      const campaignPending = current[selectedCampaignId] ?? {};
+      const nextPending = { ...campaignPending };
 
       if (nextStatus === serverStatus) {
-        // Editing to the server value means there is no local delta to save.
         delete nextPending[dateKey];
       } else {
         nextPending[dateKey] = nextStatus;
       }
 
       if (Object.keys(nextPending).length === 0) {
-        const { [currentUserId]: _removed, ...rest } = current;
+        const { [selectedCampaignId]: _removed, ...rest } = current;
         return rest;
       }
 
       return {
         ...current,
-        [currentUserId]: nextPending
+        [selectedCampaignId]: nextPending
       };
     });
   };
 
-  /**
-   * Starts drag painting at the clicked cell.
-   */
   const onStartPaint = (dateKey: string): void => {
     setIsPainting(true);
     paintDate(dateKey);
   };
 
-  /**
-   * Continues drag painting as the cursor enters additional cells.
-   */
   const onPaintWhileDragging = (dateKey: string): void => {
     if (!isPainting) {
       return;
@@ -473,15 +532,12 @@ export default function App() {
     paintDate(dateKey);
   };
 
-  /**
-   * Persists current user's pending day edits.
-   */
   const onSaveChanges = (): void => {
-    if (!currentUser || isSavingChanges) {
+    if (!currentUser || !selectedCampaignId || isSavingChanges) {
       return;
     }
 
-    const userPendingEdits = pendingEdits[currentUser.id];
+    const userPendingEdits = pendingEditsByCampaign[selectedCampaignId];
     if (!userPendingEdits || Object.keys(userPendingEdits).length === 0) {
       return;
     }
@@ -493,7 +549,7 @@ export default function App() {
     }
 
     const nextDays = {
-      ...(state.availability[currentUser.id] ?? {}),
+      ...(campaignAvailability[currentUser.id] ?? {}),
       ...userPendingEdits
     };
 
@@ -501,16 +557,18 @@ export default function App() {
     setAppError('');
 
     void setDoc(
-      doc(availabilityRef, currentUser.id),
+      doc(availabilityRef, membershipDocumentId(selectedCampaignId, currentUser.id)),
       {
+        campaignId: selectedCampaignId,
+        uid: currentUser.id,
         days: nextDays,
         updatedAt: serverTimestamp()
       },
       { merge: true }
     )
       .then(() => {
-        setPendingEdits((current) => {
-          const { [currentUser.id]: _removed, ...rest } = current;
+        setPendingEditsByCampaign((current) => {
+          const { [selectedCampaignId]: _removed, ...rest } = current;
           return rest;
         });
       })
@@ -522,9 +580,6 @@ export default function App() {
       });
   };
 
-  /**
-   * Completes invite-based app sign-in after Google auth.
-   */
   const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
     const username = normalizeName(usernameInput);
     const inviteCode = normalizeInviteCode(inviteCodeInput);
@@ -551,68 +606,92 @@ export default function App() {
     }
 
     const usersRef = getUsersCollectionRef();
-    const settingsRef = getSettingsDocumentRef();
     const invitesRef = getCampaignInvitesCollectionRef();
-    if (!usersRef || !settingsRef || !invitesRef) {
+    const membershipsRef = getMembershipsCollectionRef();
+    const settingsRef = getCampaignSettingsCollectionRef();
+    if (!usersRef || !invitesRef || !membershipsRef || !settingsRef) {
       setSignInError('Firebase is not configured.');
       return;
     }
 
     const userDocRef = doc(usersRef, authUserId);
-    const inviteDocRef = doc(invitesRef, inviteCode);
+
+    setSignInError('');
 
     void runTransaction(db, async (transaction) => {
-      const inviteSnapshot = await transaction.get(inviteDocRef);
-      let inviteRole: UserRole | null = null;
-      let shouldRedeemInvite = false;
-
-      if (inviteSnapshot.exists()) {
-        const inviteValue = inviteSnapshot.data();
-        const campaignId = typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
-        const inviteRoleValue = inviteValue.role;
-        const redeemedByUid = typeof inviteValue.redeemedByUid === 'string' ? inviteValue.redeemedByUid : '';
-        const revoked = inviteValue.revoked === true;
-
-        if (!campaignId || campaignId !== APP_NAMESPACE) {
-          throw new Error('This invite code is for a different campaign.');
-        }
-
-        if (!isUserRole(inviteRoleValue)) {
-          throw new Error('Invite code role is invalid.');
-        }
-
-        if (revoked) {
-          throw new Error('This invite code has been revoked.');
-        }
-
-        if (redeemedByUid && redeemedByUid !== authUserId) {
-          throw new Error('This invite code has already been used.');
-        }
-
-        inviteRole = inviteRoleValue;
-        shouldRedeemInvite = !redeemedByUid;
-      } else {
-        // Compatibility path for older deployments still using static invite env vars.
-        if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
-          inviteRole = 'admin';
-        } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
-          inviteRole = 'member';
-        }
-      }
-
-      if (!inviteRole) {
-        throw new Error('Invalid invite code.');
-      }
-
       const userSnapshot = await transaction.get(userDocRef);
+      let inviteCampaignId = '';
+      let roleForNewUser: UserRole = 'member';
+
+      if (inviteCode) {
+        const inviteDocRef = doc(invitesRef, inviteCode);
+        const inviteSnapshot = await transaction.get(inviteDocRef);
+
+        if (inviteSnapshot.exists()) {
+          const inviteValue = inviteSnapshot.data();
+          const campaignId =
+            typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
+          const enabled = inviteValue.enabled === true;
+
+          if (!campaignId) {
+            throw new Error('Invite code is misconfigured.');
+          }
+
+          const membershipDocRef = doc(
+            membershipsRef,
+            membershipDocumentId(campaignId, authUserId)
+          );
+          const membershipSnapshot = await transaction.get(membershipDocRef);
+
+          if (!enabled && !membershipSnapshot.exists()) {
+            throw new Error('This invite code is disabled.');
+          }
+
+          inviteCampaignId = campaignId;
+          transaction.set(
+            membershipDocRef,
+            {
+              campaignId,
+              uid: authUserId,
+              name: username,
+              email: signedInEmail,
+              joinedAt: serverTimestamp(),
+              lastSeenAt: serverTimestamp()
+            },
+            { merge: true }
+          );
+
+          const campaignSettingsDocRef = doc(settingsRef, campaignId);
+          const settingsSnapshot = await transaction.get(campaignSettingsDocRef);
+          const hostForCampaign =
+            typeof settingsSnapshot.data()?.hostUserId === 'string'
+              ? settingsSnapshot.data()?.hostUserId
+              : '';
+
+          if (!hostForCampaign) {
+            transaction.set(
+              campaignSettingsDocRef,
+              { hostUserId: authUserId, updatedAt: serverTimestamp() },
+              { merge: true }
+            );
+          }
+        } else if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
+          roleForNewUser = 'admin';
+        } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
+          roleForNewUser = 'member';
+        } else {
+          throw new Error('Invalid invite code.');
+        }
+      }
+
+      if (!inviteCode && !userSnapshot.exists()) {
+        throw new Error('Campaign invite code is required for first-time sign-in.');
+      }
+
       if (userSnapshot.exists()) {
         const existingRole = userSnapshot.data().role;
         if (!isUserRole(existingRole)) {
           throw new Error('Profile role is invalid.');
-        }
-
-        if (existingRole !== inviteRole) {
-          throw new Error('This Google profile is already registered with a different invite type.');
         }
 
         transaction.set(
@@ -631,7 +710,7 @@ export default function App() {
           {
             name: username,
             email: signedInEmail,
-            role: inviteRole,
+            role: roleForNewUser,
             createdAt: serverTimestamp(),
             lastSeenAt: serverTimestamp()
           },
@@ -639,18 +718,14 @@ export default function App() {
         );
       }
 
-      if (!state.hostUserId) {
-        transaction.set(settingsRef, { hostUserId: authUserId, updatedAt: serverTimestamp() }, { merge: true });
-      }
-
-      if (shouldRedeemInvite) {
-        transaction.update(inviteDocRef, {
-          redeemedByUid: authUserId
-        });
-      }
+      return inviteCampaignId;
     })
-      .then(() => {
+      .then((inviteCampaignId) => {
         setSessionUserId(authUserId);
+        if (inviteCampaignId) {
+          setSelectedCampaignId(inviteCampaignId);
+        }
+
         setSignInError('');
         setAppError('');
       })
@@ -664,9 +739,6 @@ export default function App() {
       });
   };
 
-  /**
-   * Starts Google OAuth popup.
-   */
   const onGoogleSignIn = (): void => {
     if (!auth || isGoogleSigningIn) {
       return;
@@ -687,107 +759,276 @@ export default function App() {
       });
   };
 
-  /**
-   * Creates a new invite document for admin-created onboarding.
-   */
-  const onCreateInvite = (role: UserRole): void => {
+  const onCreateCampaign = (campaignNameInput: string): void => {
+    const campaignName = normalizeName(campaignNameInput);
+
     if (!currentUser || currentUser.role !== 'admin') {
       return;
     }
 
-    const invitesRef = getCampaignInvitesCollectionRef();
-    if (!invitesRef) {
-      setInviteError('Firebase is not configured.');
+    if (!campaignName) {
+      setManagementError('Campaign name is required.');
       return;
     }
 
-    const inviteCode = createInviteCode();
-    const inviteCodeId = normalizeInviteCode(inviteCode);
+    if (!db) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+    const firestore = db;
 
-    setInviteError('');
-    setIsCreatingInvite(true);
+    const campaignsRef = getCampaignsCollectionRef();
+    const invitesRef = getCampaignInvitesCollectionRef();
+    const membershipsRef = getMembershipsCollectionRef();
+    const settingsRef = getCampaignSettingsCollectionRef();
+    if (!campaignsRef || !invitesRef || !membershipsRef || !settingsRef) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
 
-    void setDoc(doc(invitesRef, inviteCodeId), {
-      campaignId: APP_NAMESPACE,
-      role,
-      createdByUid: currentUser.id,
-      createdAt: serverTimestamp(),
-      revoked: false,
-      redeemedByUid: ''
-    })
-      .then(() => {
-        setLatestInviteCode(inviteCode);
+    setManagementError('');
+    setIsCreatingCampaign(true);
+
+    const createAttempt = async (): Promise<string> => {
+      for (let attempt = 0; attempt < MAX_INVITE_CREATE_ATTEMPTS; attempt += 1) {
+        const inviteCode = normalizeInviteCode(createInviteCode());
+        const campaignDocRef = doc(campaignsRef);
+        const inviteDocRef = doc(invitesRef, inviteCode);
+        const membershipDocRef = doc(
+          membershipsRef,
+          membershipDocumentId(campaignDocRef.id, currentUser.id)
+        );
+        const campaignSettingsDocRef = doc(settingsRef, campaignDocRef.id);
+
+        try {
+          await runTransaction(firestore, async (transaction) => {
+            const inviteSnapshot = await transaction.get(inviteDocRef);
+            if (inviteSnapshot.exists()) {
+              throw new Error('INVITE_CODE_CONFLICT');
+            }
+
+            transaction.set(campaignDocRef, {
+              name: campaignName,
+              inviteCode,
+              inviteEnabled: true,
+              createdByUid: currentUser.id,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+            transaction.set(inviteDocRef, {
+              campaignId: campaignDocRef.id,
+              enabled: true,
+              createdByUid: currentUser.id,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+            transaction.set(
+              membershipDocRef,
+              {
+                campaignId: campaignDocRef.id,
+                uid: currentUser.id,
+                name: currentUser.name,
+                email: currentUser.email,
+                joinedAt: serverTimestamp(),
+                lastSeenAt: serverTimestamp()
+              },
+              { merge: true }
+            );
+            transaction.set(
+              campaignSettingsDocRef,
+              {
+                hostUserId: currentUser.id,
+                updatedAt: serverTimestamp()
+              },
+              { merge: true }
+            );
+          });
+
+          return campaignDocRef.id;
+        } catch (error: unknown) {
+          if (error instanceof Error && error.message === 'INVITE_CODE_CONFLICT') {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      throw new Error('Unable to generate a unique invite code.');
+    };
+
+    void createAttempt()
+      .then((campaignId) => {
+        setSelectedCampaignId(campaignId);
       })
-      .catch(() => {
-        setInviteError('Unable to create invite code.');
+      .catch((error: unknown) => {
+        if (error instanceof Error) {
+          setManagementError(error.message);
+          return;
+        }
+
+        setManagementError('Unable to create campaign.');
       })
       .finally(() => {
-        setIsCreatingInvite(false);
+        setIsCreatingCampaign(false);
       });
   };
 
-  /**
-   * Soft-revokes an invite code by setting `revoked: true`.
-   */
-  const onRevokeInvite = (code: string): void => {
-    if (!currentUser || currentUser.role !== 'admin') {
+  const onSetInviteEnabled = (enabled: boolean): void => {
+    if (!currentUser || currentUser.role !== 'admin' || !selectedCampaign) {
       return;
     }
 
+    if (!db) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+
+    const campaignsRef = getCampaignsCollectionRef();
     const invitesRef = getCampaignInvitesCollectionRef();
-    if (!invitesRef) {
-      setInviteError('Firebase is not configured.');
+    if (!campaignsRef || !invitesRef) {
+      setManagementError('Firebase is not configured.');
       return;
     }
 
-    setInviteError('');
-    void setDoc(
-      doc(invitesRef, code),
-      {
-        revoked: true
-      },
-      { merge: true }
-    ).catch(() => {
-      setInviteError('Unable to revoke invite code.');
-    });
+    setManagementError('');
+    setIsUpdatingInvite(true);
+
+    const campaignDocRef = doc(campaignsRef, selectedCampaign.id);
+    const inviteDocRef = doc(invitesRef, selectedCampaign.inviteCode);
+
+    void runTransaction(db, async (transaction) => {
+      const campaignSnapshot = await transaction.get(campaignDocRef);
+      if (!campaignSnapshot.exists()) {
+        throw new Error('Selected campaign no longer exists.');
+      }
+
+      const inviteSnapshot = await transaction.get(inviteDocRef);
+      if (!inviteSnapshot.exists()) {
+        throw new Error('Campaign invite code is missing.');
+      }
+
+      transaction.set(
+        campaignDocRef,
+        {
+          inviteEnabled: enabled,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+      transaction.set(
+        inviteDocRef,
+        {
+          enabled,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+    })
+      .catch((error: unknown) => {
+        if (error instanceof Error) {
+          setManagementError(error.message);
+          return;
+        }
+
+        setManagementError('Unable to update invite code state.');
+      })
+      .finally(() => {
+        setIsUpdatingInvite(false);
+      });
   };
 
-  /**
-   * Changes host user in local state and persists the choice.
-   */
+  const onKickUser = (userId: string): void => {
+    if (!currentUser || currentUser.role !== 'admin' || !selectedCampaign || userId === currentUser.id) {
+      return;
+    }
+
+    if (!db) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+
+    const membershipsRef = getMembershipsCollectionRef();
+    const availabilityRef = getAvailabilityCollectionRef();
+    const settingsDocRef = getCampaignSettingsDocumentRef(selectedCampaign.id);
+    if (!membershipsRef || !availabilityRef || !settingsDocRef) {
+      setManagementError('Firebase is not configured.');
+      return;
+    }
+
+    setManagementError('');
+    setRemovingUserId(userId);
+
+    const membershipDocRef = doc(
+      membershipsRef,
+      membershipDocumentId(selectedCampaign.id, userId)
+    );
+    const availabilityDocRef = doc(
+      availabilityRef,
+      membershipDocumentId(selectedCampaign.id, userId)
+    );
+    const fallbackHostUserId =
+      hostUserId === userId ? campaignUsers.find((user) => user.id !== userId)?.id ?? '' : hostUserId;
+
+    void runTransaction(db, async (transaction) => {
+      transaction.delete(membershipDocRef);
+      transaction.delete(availabilityDocRef);
+
+      if (hostUserId === userId) {
+        transaction.set(
+          settingsDocRef,
+          {
+            hostUserId: fallbackHostUserId,
+            updatedAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+      }
+    })
+      .catch((error: unknown) => {
+        if (error instanceof Error) {
+          setManagementError(error.message);
+          return;
+        }
+
+        setManagementError('Unable to remove campaign user.');
+      })
+      .finally(() => {
+        setRemovingUserId('');
+      });
+  };
+
   const onSetHostUserId = (userId: string): void => {
-    if (!currentUser || currentUser.role !== 'admin') {
+    if (!currentUser || currentUser.role !== 'admin' || !selectedCampaign) {
       return;
     }
 
-    const settingsRef = getSettingsDocumentRef();
-    if (!settingsRef || !state.users.some((user) => user.id === userId)) {
+    const settingsRef = getCampaignSettingsDocumentRef(selectedCampaign.id);
+    if (!settingsRef || !campaignUsers.some((user) => user.id === userId)) {
       return;
     }
 
-    setState((current) => ({
-      ...current,
-      hostUserId: userId
-    }));
+    setHostUserId(userId);
 
     void setDoc(settingsRef, { hostUserId: userId, updatedAt: serverTimestamp() }, { merge: true }).catch(() => {
       setAppError('Unable to update host assignment.');
     });
   };
 
-  /**
-   * Clears local state and signs out from Firebase Auth.
-   */
   const onSignOut = (): void => {
-    setState(INITIAL_PERSISTED_STATE);
     setSessionUserId('');
-    setInvites([]);
-    setLatestInviteCode('');
-    setInviteError('');
+    setUserProfile(null);
+    setMemberships([]);
+    setCampaigns([]);
+    setSelectedCampaignId('');
+    setCampaignUsers([]);
+    setCampaignAvailability({});
+    setHostUserId('');
+    setManagementError('');
     setSignInError('');
     setAppError('');
     setIsPainting(false);
-    setPendingEdits({});
+    setPendingEditsByCampaign({});
     setIsSavingChanges(false);
 
     if (!auth) {
@@ -799,9 +1040,6 @@ export default function App() {
     });
   };
 
-  /**
-   * Guards month updates so invalid values cannot poison date calculations.
-   */
   const onChangeMonth = (nextValue: string): void => {
     setSelectedMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
   };
@@ -814,7 +1052,6 @@ export default function App() {
           <p>Firebase setup is required for shared state.</p>
         </header>
         <main>
-          {/* Keep a single <main> wrapper for the config error state. */}
           <section className="page-card sign-in-card">
             <h2>Missing Firebase Config</h2>
             <p>{firebaseConfigError}</p>
@@ -824,7 +1061,7 @@ export default function App() {
     );
   }
 
-  if (!authReady || !dataReady) {
+  if (!authReady || (authUserId && !profileReady)) {
     return (
       <div className="app-shell">
         <header className="app-header">
@@ -871,17 +1108,49 @@ export default function App() {
     onSaveChanges
   };
 
+  const noCampaignSelectedView = (
+    <section className="page-card">
+      <h2>No Campaign Selected</h2>
+      <p>
+        Join a campaign with an invite code at sign-in, or create one from Campaign Management if
+        you are an admin.
+      </p>
+    </section>
+  );
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1>DnD Group Scheduler</h1>
         <p>
-          Signed in as <strong>{currentUser.name}</strong> ({currentUser.role}). Host:{' '}
+          Signed in as <strong>{currentUser.name}</strong> ({currentUser.role}). Campaign:{' '}
+          <strong>{selectedCampaign?.name ?? 'None selected'}</strong>. Host:{' '}
           <strong>{hostUser?.name ?? 'Not set'}</strong>
         </p>
-        <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
-          Sign Out
-        </button>
+        <div className="header-controls">
+          <label className="month-picker" htmlFor="campaign-select">
+            Campaign
+            <select
+              id="campaign-select"
+              value={selectedCampaignId}
+              onChange={(event) => setSelectedCampaignId(event.target.value)}
+              disabled={campaigns.length === 0}
+            >
+              {campaigns.length === 0 ? (
+                <option value="">No Campaigns</option>
+              ) : (
+                campaigns.map((campaign) => (
+                  <option key={campaign.id} value={campaign.id}>
+                    {campaign.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
+            Sign Out
+          </button>
+        </div>
         {appError ? <p className="form-error">{appError}</p> : null}
       </header>
 
@@ -890,25 +1159,36 @@ export default function App() {
           My Availability
         </NavLink>
         {canViewHostSummary ? <NavLink to="/host">Host Summary</NavLink> : null}
-        {currentUser.role === 'admin' ? <NavLink to="/admin">Admin Management</NavLink> : null}
+        {currentUser.role === 'admin' ? <NavLink to="/admin">Campaign Management</NavLink> : null}
       </nav>
 
       <main>
         <Routes>
-          <Route path="/" element={<PersonalAvailabilityPage {...personalAvailabilityPageProps} />} />
+          <Route
+            path="/"
+            element={
+              selectedCampaign ? (
+                <PersonalAvailabilityPage {...personalAvailabilityPageProps} />
+              ) : (
+                noCampaignSelectedView
+              )
+            }
+          />
           <Route
             path="/host"
             element={
-              canViewHostSummary ? (
+              canViewHostSummary && selectedCampaign ? (
                 <HostSummaryPage
-                  users={state.users}
+                  users={campaignUsers}
                   currentUser={currentUser}
-                  hostUserId={state.hostUserId}
+                  hostUserId={hostUserId}
                   monthDateKeys={monthDateKeys}
                   getStatus={getStatus}
                 />
-              ) : (
+              ) : selectedCampaign ? (
                 <PersonalAvailabilityPage {...personalAvailabilityPageProps} />
+              ) : (
+                noCampaignSelectedView
               )
             }
           />
@@ -917,20 +1197,30 @@ export default function App() {
             element={
               <AdminManagementPage
                 currentUser={currentUser}
-                campaignId={APP_NAMESPACE}
-                users={state.users}
-                hostUserId={state.hostUserId}
+                selectedCampaign={selectedCampaign}
+                users={campaignUsers}
+                hostUserId={hostUserId}
                 setHostUserId={onSetHostUserId}
-                invites={invites}
-                latestInviteCode={latestInviteCode}
-                inviteError={inviteError}
-                isCreatingInvite={isCreatingInvite}
-                onCreateInvite={onCreateInvite}
-                onRevokeInvite={onRevokeInvite}
+                managementError={managementError}
+                isCreatingCampaign={isCreatingCampaign}
+                isUpdatingInvite={isUpdatingInvite}
+                removingUserId={removingUserId}
+                onCreateCampaign={onCreateCampaign}
+                onSetInviteEnabled={onSetInviteEnabled}
+                onKickUser={onKickUser}
               />
             }
           />
-          <Route path="*" element={<PersonalAvailabilityPage {...personalAvailabilityPageProps} />} />
+          <Route
+            path="*"
+            element={
+              selectedCampaign ? (
+                <PersonalAvailabilityPage {...personalAvailabilityPageProps} />
+              ) : (
+                noCampaignSelectedView
+              )
+            }
+          />
         </Routes>
       </main>
     </div>

@@ -5,13 +5,14 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 ## Features
 
 - Google sign-in + invite-code onboarding (`member` and `admin` access)
-- Campaign-scoped invite codes created/revoked by campaign admins
+- Multi-campaign membership with global campaign selector
+- One invite code per campaign, with admin enable/disable controls
 - Dark-mode calendar UI
 - Paint-style availability editing (click or click-drag)
 - Sunday-first month grid with month picker
 - Past dates are locked/greyed out, and today is highlighted
-- Host summary view (host + admin access)
-- Admin-only management page to view signed-in users and assign host
+- Host summary view (host + admin access) with past-date filtering
+- Admin-only campaign management to create campaigns, assign host, and remove members
 - Realtime shared state across browser profiles/devices via Firestore
 
 ## Firebase Setup
@@ -92,8 +93,9 @@ firebase deploy --only firestore:rules
 
 Primary flow:
 
-- Admins create campaign invite codes from `Admin Management` in the app UI.
-- Invite codes are stored in Firestore and tied to the current campaign namespace.
+- Admins create campaigns from `Campaign Management` in the app UI.
+- Each campaign gets a single invite code that can be enabled or disabled.
+- Users who sign in with a campaign invite code are added to that campaign.
 
 Bootstrap fallback (optional):
 
