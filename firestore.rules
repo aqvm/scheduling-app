@@ -144,7 +144,7 @@ service cloud.firestore {
         );
 
       allow create: if signedIn() &&
-        hasUserProfile(appNamespace, request.auth.uid) &&
+        existsAfter(userDocPath(appNamespace, request.auth.uid)) &&
         request.resource.data.keys().hasOnly(['campaignId', 'uid', 'name', 'email', 'joinedAt', 'lastSeenAt']) &&
         request.resource.data.campaignId is string &&
         request.resource.data.campaignId.size() > 0 &&
@@ -156,8 +156,8 @@ service cloud.firestore {
         request.resource.data.email is string &&
         request.resource.data.email.size() > 0 &&
         request.resource.data.email.size() <= 320 &&
-        request.resource.data.name == get(userDocPath(appNamespace, request.auth.uid)).data.name &&
-        request.resource.data.email == get(userDocPath(appNamespace, request.auth.uid)).data.email &&
+        request.resource.data.name == getAfter(userDocPath(appNamespace, request.auth.uid)).data.name &&
+        request.resource.data.email == getAfter(userDocPath(appNamespace, request.auth.uid)).data.email &&
         request.resource.data.joinedAt is timestamp &&
         request.resource.data.lastSeenAt is timestamp &&
         (
@@ -232,7 +232,7 @@ service cloud.firestore {
         request.resource.data.hostUserId.size() <= 128 &&
         (
           request.resource.data.hostUserId == '' ||
-          exists(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(campaignId, request.resource.data.hostUserId)))
+          existsAfter(/databases/$(database)/documents/apps/$(appNamespace)/memberships/$(membershipDocId(campaignId, request.resource.data.hostUserId)))
         ) &&
         request.resource.data.updatedAt is timestamp;
 
