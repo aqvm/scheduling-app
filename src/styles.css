@@ -57,6 +57,13 @@ select {
   flex-wrap: wrap;
 }
 
+.join-campaign-form {
+  display: flex;
+  gap: 0.65rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
 .top-nav {
   display: flex;
   gap: 0.9rem;

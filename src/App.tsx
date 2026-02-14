@@ -95,9 +95,14 @@ function getSignedInEmail(user: User | null): string {
   return googleProvider?.email?.trim().toLowerCase() ?? '';
 }
 
+function getUsernameFromEmail(email: string): string {
+  const atIndex = email.indexOf('@');
+  const localPart = atIndex >= 0 ? email.slice(0, atIndex) : email;
+  return normalizeName(localPart);
+}
+
 export default function App() {
   const [authUserId, setAuthUserId] = useState('');
-  const [sessionUserId, setSessionUserId] = useState('');
   const [authReady, setAuthReady] = useState(false);
   const [profileReady, setProfileReady] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -120,12 +125,14 @@ export default function App() {
   const [isUpdatingInvite, setIsUpdatingInvite] = useState(false);
   const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const [removingUserId, setRemovingUserId] = useState('');
+  const [joinInviteCode, setJoinInviteCode] = useState('');
+  const [isJoiningCampaign, setIsJoiningCampaign] = useState(false);
   const [signInError, setSignInError] = useState('');
   const [appError, setAppError] = useState('');
   const [managementError, setManagementError] = useState('');
 
   const currentUser =
-    userProfile && sessionUserId && userProfile.id === sessionUserId ? userProfile : null;
+    userProfile !== null && authUserId.length > 0 && userProfile.id === authUserId ? userProfile : null;
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null;
   const hostUser = campaignUsers.find((user) => user.id === hostUserId) ?? null;
   const canViewHostSummary =
@@ -148,15 +155,11 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAuthUserId(user.uid);
-        setSessionUserId((currentSessionUserId) =>
-          currentSessionUserId && currentSessionUserId !== user.uid ? '' : currentSessionUserId
-        );
         setAuthReady(true);
         return;
       }
 
       setAuthUserId('');
-      setSessionUserId('');
       setAuthReady(true);
     });
 
@@ -643,17 +646,11 @@ export default function App() {
       });
   };
 
-  const onSignIn = (usernameInput: string, inviteCodeInput: string): void => {
-    const username = normalizeName(usernameInput);
+  const onJoinCampaign = (inviteCodeInput: string): void => {
     const inviteCode = normalizeInviteCode(inviteCodeInput);
     const authUser = auth?.currentUser ?? null;
     const signedInUserId = authUser?.uid ?? authUserId;
     const signedInEmail = getSignedInEmail(authUser);
-
-    if (!username) {
-      setSignInError('Username is required.');
-      return;
-    }
 
     if (!signedInUserId) {
       setSignInError('Sign in with Google first.');
@@ -672,8 +669,19 @@ export default function App() {
       return;
     }
 
+    const username = getUsernameFromEmail(signedInEmail);
+    if (!username) {
+      setSignInError('Unable to derive a username from your Google account email.');
+      return;
+    }
+
     if (!db) {
       setSignInError('Firebase is not configured.');
+      return;
+    }
+
+    if (!inviteCode) {
+      setSignInError('Campaign invite code is required to join a campaign.');
       return;
     }
 
@@ -689,75 +697,70 @@ export default function App() {
     const userDocRef = doc(usersRef, signedInUserId);
 
     setSignInError('');
+    setIsJoiningCampaign(true);
 
     void runTransaction(db, async (transaction) => {
       const userSnapshot = await transaction.get(userDocRef);
       let inviteCampaignId = '';
       let roleForNewUser: UserRole = 'member';
 
-      if (inviteCode) {
-        const inviteDocRef = doc(invitesRef, inviteCode);
-        const inviteSnapshot = await transaction.get(inviteDocRef);
+      const inviteDocRef = doc(invitesRef, inviteCode);
+      const inviteSnapshot = await transaction.get(inviteDocRef);
 
-        if (inviteSnapshot.exists()) {
-          const inviteValue = inviteSnapshot.data();
-          const campaignId =
-            typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
-          const enabled = inviteValue.enabled === true;
+      if (inviteSnapshot.exists()) {
+        const inviteValue = inviteSnapshot.data();
+        const campaignId =
+          typeof inviteValue.campaignId === 'string' ? inviteValue.campaignId : '';
+        const enabled = inviteValue.enabled === true;
 
-          if (!campaignId) {
-            throw new Error('Invite code is misconfigured.');
-          }
+        if (!campaignId) {
+          throw new Error('Invite code is misconfigured.');
+        }
 
-          const membershipDocRef = doc(
-            membershipsRef,
-            membershipDocumentId(campaignId, signedInUserId)
-          );
-          const membershipSnapshot = await transaction.get(membershipDocRef);
+        const membershipDocRef = doc(
+          membershipsRef,
+          membershipDocumentId(campaignId, signedInUserId)
+        );
+        const membershipSnapshot = await transaction.get(membershipDocRef);
 
-          if (!enabled && !membershipSnapshot.exists()) {
-            throw new Error('This invite code is disabled.');
-          }
+        if (!enabled && !membershipSnapshot.exists()) {
+          throw new Error('This invite code is disabled.');
+        }
 
-          inviteCampaignId = campaignId;
+        inviteCampaignId = campaignId;
+        transaction.set(
+          membershipDocRef,
+          {
+            campaignId,
+            uid: signedInUserId,
+            name: username,
+            email: signedInEmail,
+            joinedAt: serverTimestamp(),
+            lastSeenAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+
+        const campaignSettingsDocRef = doc(settingsRef, campaignId);
+        const settingsSnapshot = await transaction.get(campaignSettingsDocRef);
+        const hostForCampaign =
+          typeof settingsSnapshot.data()?.hostUserId === 'string'
+            ? settingsSnapshot.data()?.hostUserId
+            : '';
+
+        if (!hostForCampaign) {
           transaction.set(
-            membershipDocRef,
-            {
-              campaignId,
-              uid: signedInUserId,
-              name: username,
-              email: signedInEmail,
-              joinedAt: serverTimestamp(),
-              lastSeenAt: serverTimestamp()
-            },
+            campaignSettingsDocRef,
+            { hostUserId: signedInUserId, updatedAt: serverTimestamp() },
             { merge: true }
           );
-
-          const campaignSettingsDocRef = doc(settingsRef, campaignId);
-          const settingsSnapshot = await transaction.get(campaignSettingsDocRef);
-          const hostForCampaign =
-            typeof settingsSnapshot.data()?.hostUserId === 'string'
-              ? settingsSnapshot.data()?.hostUserId
-              : '';
-
-          if (!hostForCampaign) {
-            transaction.set(
-              campaignSettingsDocRef,
-              { hostUserId: signedInUserId, updatedAt: serverTimestamp() },
-              { merge: true }
-            );
-          }
-        } else if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
-          roleForNewUser = 'admin';
-        } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
-          roleForNewUser = 'member';
-        } else {
-          throw new Error('Invalid invite code.');
         }
-      }
-
-      if (!inviteCode && !userSnapshot.exists()) {
-        throw new Error('Campaign invite code is required for first-time sign-in.');
+      } else if (inviteCode === normalizeInviteCode(LEGACY_ADMIN_INVITE_CODE)) {
+        roleForNewUser = 'admin';
+      } else if (inviteCode === normalizeInviteCode(LEGACY_MEMBER_INVITE_CODE)) {
+        roleForNewUser = 'member';
+      } else {
+        throw new Error('Invalid invite code.');
       }
 
       if (userSnapshot.exists()) {
@@ -793,16 +796,19 @@ export default function App() {
       return inviteCampaignId;
     })
       .then((inviteCampaignId) => {
-        setSessionUserId(signedInUserId);
         if (inviteCampaignId) {
           setSelectedCampaignId(inviteCampaignId);
         }
 
+        setJoinInviteCode('');
         setSignInError('');
         setAppError('');
-    })
+      })
       .catch((error: unknown) => {
-        setSignInError(formatFirebaseError(error, 'Unable to sign in at this time.'));
+        setSignInError(formatFirebaseError(error, 'Unable to join campaign at this time.'));
+      })
+      .finally(() => {
+        setIsJoiningCampaign(false);
       });
   };
 
@@ -1158,7 +1164,6 @@ export default function App() {
   };
 
   const onSignOut = (): void => {
-    setSessionUserId('');
     setUserProfile(null);
     setMemberships([]);
     setCampaigns([]);
@@ -1166,6 +1171,8 @@ export default function App() {
     setCampaignUsers([]);
     setCampaignAvailability({});
     setHostUserId('');
+    setJoinInviteCode('');
+    setIsJoiningCampaign(false);
     setManagementError('');
     setSignInError('');
     setAppError('');
@@ -1214,7 +1221,7 @@ export default function App() {
     );
   }
 
-  if (!currentUser) {
+  if (!authUserId) {
     return (
       <div className="app-shell">
         <header className="app-header">
@@ -1223,12 +1230,92 @@ export default function App() {
         </header>
         <main>
           <SignInPage
-            authUserId={authUserId}
             onGoogleSignIn={onGoogleSignIn}
             isGoogleSigningIn={isGoogleSigningIn}
-            onSignIn={onSignIn}
             error={signInError}
           />
+        </main>
+      </div>
+    );
+  }
+
+  const signedInName = getUsernameFromEmail(getSignedInEmail(auth?.currentUser ?? null)) || 'Unknown';
+
+  const campaignSelectionControl = (
+    <label className="month-picker" htmlFor="campaign-select">
+      Campaign
+      <select
+        id="campaign-select"
+        value={selectedCampaignId}
+        onChange={(event) => setSelectedCampaignId(event.target.value)}
+        disabled={campaigns.length === 0}
+      >
+        {campaigns.length === 0 ? (
+          <option value="">No Campaigns</option>
+        ) : (
+          campaigns.map((campaign) => (
+            <option key={campaign.id} value={campaign.id}>
+              {campaign.name}
+            </option>
+          ))
+        )}
+      </select>
+    </label>
+  );
+
+  const joinCampaignControl = (
+    <form
+      className="join-campaign-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onJoinCampaign(joinInviteCode);
+      }}
+    >
+      <label className="month-picker" htmlFor="join-campaign-code-input">
+        Join Campaign
+        <input
+          id="join-campaign-code-input"
+          type="text"
+          value={joinInviteCode}
+          onChange={(event) => {
+            setJoinInviteCode(event.target.value);
+            if (signInError) {
+              setSignInError('');
+            }
+          }}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="XXXX-XXXX-XXXX"
+          maxLength={32}
+        />
+      </label>
+      <button type="submit" className="primary-button" disabled={isJoiningCampaign}>
+        {isJoiningCampaign ? 'Joining...' : 'Join'}
+      </button>
+    </form>
+  );
+
+  if (!currentUser) {
+    return (
+      <div className="app-shell">
+        <header className="app-header">
+          <h1>DnD Group Scheduler</h1>
+          <p>Signed in as <strong>{signedInName}</strong>. Join a campaign to continue.</p>
+          <div className="header-controls">
+            {campaignSelectionControl}
+            {joinCampaignControl}
+            <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
+              Sign Out
+            </button>
+          </div>
+          {signInError ? <p className="form-error">{signInError}</p> : null}
+          {appError ? <p className="form-error">{appError}</p> : null}
+        </header>
+        <main>
+          <section className="page-card">
+            <h2>Join a Campaign</h2>
+            <p>Use the invite code field above to join your first or next campaign.</p>
+          </section>
         </main>
       </div>
     );
@@ -1254,7 +1341,7 @@ export default function App() {
     <section className="page-card">
       <h2>No Campaign Selected</h2>
       <p>
-        Join a campaign with an invite code at sign-in, or create one from Campaign Management if
+        Join a campaign with the invite code field above, or create one from Campaign Management if
         you are an admin.
       </p>
     </section>
@@ -1270,29 +1357,13 @@ export default function App() {
           <strong>{hostUser?.name ?? 'Not set'}</strong>
         </p>
         <div className="header-controls">
-          <label className="month-picker" htmlFor="campaign-select">
-            Campaign
-            <select
-              id="campaign-select"
-              value={selectedCampaignId}
-              onChange={(event) => setSelectedCampaignId(event.target.value)}
-              disabled={campaigns.length === 0}
-            >
-              {campaigns.length === 0 ? (
-                <option value="">No Campaigns</option>
-              ) : (
-                campaigns.map((campaign) => (
-                  <option key={campaign.id} value={campaign.id}>
-                    {campaign.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
+          {campaignSelectionControl}
+          {joinCampaignControl}
           <button type="button" className="ghost-button sign-out-button" onClick={onSignOut}>
             Sign Out
           </button>
         </div>
+        {signInError ? <p className="form-error">{signInError}</p> : null}
         {appError ? <p className="form-error">{appError}</p> : null}
       </header>
 
