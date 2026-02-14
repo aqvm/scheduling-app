@@ -42,6 +42,12 @@ service cloud.firestore {
       return membershipId.matches('^.+_' + uid + '$');
     }
 
+    function hasValidAlias(alias) {
+      return alias is string &&
+        alias.size() > 0 &&
+        alias.size() <= 64;
+    }
+
     match /apps/{appNamespace}/users/{userId} {
       allow get: if signedIn() &&
         (
@@ -53,26 +59,17 @@ service cloud.firestore {
 
       allow create: if signedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.keys().hasOnly(['name', 'email', 'role', 'createdAt', 'lastSeenAt']) &&
-        request.resource.data.name is string &&
-        request.resource.data.name.size() > 0 &&
-        request.resource.data.name.size() <= 120 &&
-        request.resource.data.email is string &&
-        request.resource.data.email.size() > 0 &&
-        request.resource.data.email.size() <= 320 &&
+        request.resource.data.keys().hasOnly(['alias', 'role', 'createdAt', 'lastSeenAt']) &&
+        hasValidAlias(request.resource.data.alias) &&
         request.resource.data.role == 'member' &&
         request.resource.data.lastSeenAt is timestamp &&
         request.resource.data.createdAt is timestamp;
 
       allow update: if signedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'lastSeenAt']) &&
-        request.resource.data.name is string &&
-        request.resource.data.name.size() > 0 &&
-        request.resource.data.name.size() <= 120 &&
-        request.resource.data.email is string &&
-        request.resource.data.email.size() > 0 &&
-        request.resource.data.email.size() <= 320 &&
+        request.resource.data.keys().hasOnly(['alias', 'role', 'createdAt', 'lastSeenAt']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt', 'name', 'email']) &&
+        hasValidAlias(request.resource.data.alias) &&
         request.resource.data.lastSeenAt is timestamp &&
         request.resource.data.role == resource.data.role &&
         request.resource.data.createdAt == resource.data.createdAt;
@@ -165,19 +162,13 @@ service cloud.firestore {
 
       allow create: if signedIn() &&
         existsAfter(userDocPath(appNamespace, request.auth.uid)) &&
-        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'name', 'email', 'joinedAt', 'lastSeenAt']) &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'alias', 'joinedAt', 'lastSeenAt']) &&
         request.resource.data.campaignId is string &&
         request.resource.data.campaignId.size() > 0 &&
         request.resource.data.uid == request.auth.uid &&
         membershipId == membershipDocId(request.resource.data.campaignId, request.auth.uid) &&
-        request.resource.data.name is string &&
-        request.resource.data.name.size() > 0 &&
-        request.resource.data.name.size() <= 120 &&
-        request.resource.data.email is string &&
-        request.resource.data.email.size() > 0 &&
-        request.resource.data.email.size() <= 320 &&
-        request.resource.data.name == getAfter(userDocPath(appNamespace, request.auth.uid)).data.name &&
-        request.resource.data.email == getAfter(userDocPath(appNamespace, request.auth.uid)).data.email &&
+        hasValidAlias(request.resource.data.alias) &&
+        request.resource.data.alias == getAfter(userDocPath(appNamespace, request.auth.uid)).data.alias &&
         request.resource.data.joinedAt is timestamp &&
         request.resource.data.lastSeenAt is timestamp &&
         (
@@ -191,19 +182,14 @@ service cloud.firestore {
       allow update: if signedIn() &&
         hasUserProfile(appNamespace, request.auth.uid) &&
         request.auth.uid == resource.data.uid &&
+        request.resource.data.keys().hasOnly(['campaignId', 'uid', 'alias', 'joinedAt', 'lastSeenAt']) &&
         membershipId == membershipDocId(resource.data.campaignId, resource.data.uid) &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'email', 'lastSeenAt']) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['alias', 'lastSeenAt', 'name', 'email']) &&
         request.resource.data.campaignId == resource.data.campaignId &&
         request.resource.data.uid == resource.data.uid &&
         request.resource.data.joinedAt == resource.data.joinedAt &&
-        request.resource.data.name is string &&
-        request.resource.data.name.size() > 0 &&
-        request.resource.data.name.size() <= 120 &&
-        request.resource.data.email is string &&
-        request.resource.data.email.size() > 0 &&
-        request.resource.data.email.size() <= 320 &&
-        request.resource.data.name == get(userDocPath(appNamespace, request.auth.uid)).data.name &&
-        request.resource.data.email == get(userDocPath(appNamespace, request.auth.uid)).data.email &&
+        hasValidAlias(request.resource.data.alias) &&
+        request.resource.data.alias == get(userDocPath(appNamespace, request.auth.uid)).data.alias &&
         request.resource.data.lastSeenAt is timestamp;
 
       allow delete: if signedIn() && isAdmin(appNamespace, request.auth.uid);

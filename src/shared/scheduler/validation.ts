@@ -23,7 +23,7 @@ export function isUserRole(value: unknown): value is UserRole {
 }
 
 /**
- * Collapses extra whitespace and trims the user's display name.
+ * Collapses extra whitespace and trims user-provided labels (campaign names, aliases).
  */
 export function normalizeName(name: string): string {
   return name.trim().replace(/\s+/g, ' ');

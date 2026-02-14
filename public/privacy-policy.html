@@ -80,8 +80,8 @@
 
         <h2>Information Collected</h2>
         <ul>
-          <li>Google account identity details used for sign-in (such as your email address).</li>
-          <li>Profile information you provide in the app (such as display name).</li>
+          <li>Google Authentication session data required to verify sign-in.</li>
+          <li>A pseudonymous in-app alias derived from your Firebase user ID.</li>
           <li>Campaign membership and invite-code usage data.</li>
           <li>Availability selections you submit for calendar dates.</li>
         </ul>
@@ -98,6 +98,7 @@
         <p>
           Your data is shared only with users who are members of the same campaign and with service
           providers required to run the app (for example, Firebase/Google Cloud). Data is not sold.
+          The app does not persist email addresses, phone numbers, or profile photos in Firestore.
         </p>
 
         <h2>Data Retention</h2>

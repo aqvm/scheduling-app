@@ -192,8 +192,8 @@ export function AdminManagementPage({
             users.map((user) => (
               <label key={user.id} className="admin-row">
                 <span>
-                  <strong>{user.name}</strong>
-                  <small>{user.email || 'No email on file yet'}</small>
+                  <strong>{user.alias}</strong>
+                  <small>User ID: {user.id}</small>
                 </span>
                 <input
                   type="radio"
@@ -219,8 +219,8 @@ export function AdminManagementPage({
               users.map((user) => (
                 <div key={`remove-${user.id}`} className="admin-row">
                   <span>
-                    <strong>{user.name}</strong>
-                    <small>{user.email || 'No email on file yet'}</small>
+                    <strong>{user.alias}</strong>
+                    <small>User ID: {user.id}</small>
                   </span>
                   <button
                     type="button"
