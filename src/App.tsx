@@ -113,6 +113,7 @@ export default function App() {
   const [isUpdatingInvite, setIsUpdatingInvite] = useState(false);
   const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const [removingUserId, setRemovingUserId] = useState('');
+  const [signInDisplayName, setSignInDisplayName] = useState('');
   const [joinInviteCode, setJoinInviteCode] = useState('');
   const [isJoiningCampaign, setIsJoiningCampaign] = useState(false);
   const [signInError, setSignInError] = useState('');
@@ -641,7 +642,7 @@ export default function App() {
     const inviteCode = normalizeInviteCode(inviteCodeInput);
     const authUser = auth?.currentUser ?? null;
     const signedInUserId = authUser?.uid ?? authUserId;
-    const userAlias = createUserAlias(signedInUserId);
+    const requestedAlias = normalizeName(signInDisplayName);
 
     if (!signedInUserId) {
       setSignInError('Sign in with Google first.');
@@ -650,6 +651,16 @@ export default function App() {
 
     if (!isSignedInWithGoogle(authUser)) {
       setSignInError('Google sign-in session is missing. Please continue with Google again.');
+      return;
+    }
+
+    if (requestedAlias.length > 64) {
+      setSignInError('Display name must be 64 characters or fewer.');
+      return;
+    }
+
+    if (!currentUser && !requestedAlias) {
+      setSignInError('Enter your display name before joining your first campaign.');
       return;
     }
 
@@ -696,6 +707,20 @@ export default function App() {
         throw new Error('Invite code is misconfigured.');
       }
 
+      const existingAlias =
+        userSnapshot.exists() && typeof userSnapshot.data().alias === 'string'
+          ? normalizeName(userSnapshot.data().alias)
+          : '';
+      const effectiveAlias = existingAlias || requestedAlias || createUserAlias(signedInUserId);
+
+      if (!effectiveAlias) {
+        throw new Error('Display name is required for first-time setup.');
+      }
+
+      if (effectiveAlias.length > 64) {
+        throw new Error('Display name must be 64 characters or fewer.');
+      }
+
       const membershipDocRef = doc(
         membershipsRef,
         membershipDocumentId(campaignId, signedInUserId)
@@ -719,7 +744,7 @@ export default function App() {
         {
           campaignId,
           uid: signedInUserId,
-          alias: userAlias,
+          alias: effectiveAlias,
           joinedAt: hasExistingMembership ? existingJoinedAt : serverTimestamp(),
           lastSeenAt: serverTimestamp()
         }
@@ -739,7 +764,7 @@ export default function App() {
         transaction.set(
           userDocRef,
           {
-            alias: userAlias,
+            alias: effectiveAlias,
             role: existingRole,
             createdAt: existingCreatedAt,
             lastSeenAt: serverTimestamp()
@@ -749,7 +774,7 @@ export default function App() {
         transaction.set(
           userDocRef,
           {
-            alias: userAlias,
+            alias: effectiveAlias,
             role: 'member',
             createdAt: serverTimestamp(),
             lastSeenAt: serverTimestamp()
@@ -779,6 +804,17 @@ export default function App() {
   const onGoogleSignIn = (): void => {
     const firebaseAuth = auth;
     if (!firebaseAuth || isGoogleSigningIn) {
+      return;
+    }
+
+    const displayName = normalizeName(signInDisplayName);
+    if (!displayName) {
+      setSignInError('Enter your display name before continuing with Google.');
+      return;
+    }
+
+    if (displayName.length > 64) {
+      setSignInError('Display name must be 64 characters or fewer.');
       return;
     }
 
@@ -1133,6 +1169,7 @@ export default function App() {
     setCampaignUsers([]);
     setCampaignAvailability({});
     setHostUserId('');
+    setSignInDisplayName('');
     setJoinInviteCode('');
     setIsJoiningCampaign(false);
     setManagementError('');
@@ -1192,6 +1229,13 @@ export default function App() {
         </header>
         <main>
           <SignInPage
+            displayName={signInDisplayName}
+            setDisplayName={(value) => {
+              setSignInDisplayName(value);
+              if (signInError) {
+                setSignInError('');
+              }
+            }}
             onGoogleSignIn={onGoogleSignIn}
             isGoogleSigningIn={isGoogleSigningIn}
             error={signInError}
@@ -1201,7 +1245,7 @@ export default function App() {
     );
   }
 
-  const signedInName = createUserAlias(authUserId);
+  const signedInName = normalizeName(signInDisplayName) || createUserAlias(authUserId);
 
   const campaignSelectionControl = (
     <label className="month-picker" htmlFor="campaign-select">
@@ -1233,6 +1277,26 @@ export default function App() {
         onJoinCampaign(joinInviteCode);
       }}
     >
+      {!currentUser ? (
+        <label className="month-picker" htmlFor="join-display-name-input">
+          Display Name
+          <input
+            id="join-display-name-input"
+            type="text"
+            value={signInDisplayName}
+            onChange={(event) => {
+              setSignInDisplayName(event.target.value);
+              if (signInError) {
+                setSignInError('');
+              }
+            }}
+            autoComplete="nickname"
+            spellCheck={false}
+            placeholder="Your display name"
+            maxLength={64}
+          />
+        </label>
+      ) : null}
       <label className="month-picker" htmlFor="join-campaign-code-input">
         Join Campaign
         <input
