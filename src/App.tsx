@@ -686,8 +686,7 @@ export default function App() {
     const usersRef = getUsersCollectionRef();
     const invitesRef = getCampaignInvitesCollectionRef();
     const membershipsRef = getMembershipsCollectionRef();
-    const settingsRef = getCampaignSettingsCollectionRef();
-    if (!usersRef || !invitesRef || !membershipsRef || !settingsRef) {
+    if (!usersRef || !invitesRef || !membershipsRef) {
       setSignInError('Firebase is not configured.');
       return;
     }
@@ -717,59 +716,33 @@ export default function App() {
         throw new Error('Invite code is misconfigured.');
       }
 
+      const hasExistingMembership = memberships.some(
+        (membership) => membership.campaignId === campaignId && membership.userId === signedInUserId
+      );
+
+      if (!enabled && !hasExistingMembership) {
+        throw new Error('This invite code is disabled.');
+      }
+
       const membershipDocRef = doc(
         membershipsRef,
         membershipDocumentId(campaignId, signedInUserId)
       );
-      const membershipSnapshot = await transaction.get(membershipDocRef);
-
-      if (!enabled && !membershipSnapshot.exists()) {
-        throw new Error('This invite code is disabled.');
-      }
 
       inviteCampaignId = campaignId;
 
-      if (membershipSnapshot.exists()) {
-        transaction.set(
-          membershipDocRef,
-          {
-            campaignId,
-            uid: signedInUserId,
-            name: username,
-            email: signedInEmail,
-            lastSeenAt: serverTimestamp()
-          },
-          { merge: true }
-        );
-      } else {
-        transaction.set(
-          membershipDocRef,
-          {
-            campaignId,
-            uid: signedInUserId,
-            name: username,
-            email: signedInEmail,
-            joinedAt: serverTimestamp(),
-            lastSeenAt: serverTimestamp()
-          },
-          { merge: true }
-        );
-      }
-
-      const campaignSettingsDocRef = doc(settingsRef, campaignId);
-      const settingsSnapshot = await transaction.get(campaignSettingsDocRef);
-      const hostForCampaign =
-        typeof settingsSnapshot.data()?.hostUserId === 'string'
-          ? settingsSnapshot.data()?.hostUserId
-          : '';
-
-      if (!hostForCampaign) {
-        transaction.set(
-          campaignSettingsDocRef,
-          { hostUserId: signedInUserId, updatedAt: serverTimestamp() },
-          { merge: true }
-        );
-      }
+      transaction.set(
+        membershipDocRef,
+        {
+          campaignId,
+          uid: signedInUserId,
+          name: username,
+          email: signedInEmail,
+          ...(hasExistingMembership ? {} : { joinedAt: serverTimestamp() }),
+          lastSeenAt: serverTimestamp()
+        },
+        { merge: true }
+      );
 
       if (userSnapshot.exists()) {
         const existingRole = userSnapshot.data().role;
