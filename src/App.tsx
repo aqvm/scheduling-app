@@ -711,7 +711,7 @@ export default function App() {
         userSnapshot.exists() && typeof userSnapshot.data().alias === 'string'
           ? normalizeName(userSnapshot.data().alias)
           : '';
-      const effectiveAlias = existingAlias || requestedAlias || createUserAlias(signedInUserId);
+      const effectiveAlias = requestedAlias || existingAlias || createUserAlias(signedInUserId);
 
       if (!effectiveAlias) {
         throw new Error('Display name is required for first-time setup.');
@@ -1277,26 +1277,24 @@ export default function App() {
         onJoinCampaign(joinInviteCode);
       }}
     >
-      {!currentUser ? (
-        <label className="month-picker" htmlFor="join-display-name-input">
-          Display Name
-          <input
-            id="join-display-name-input"
-            type="text"
-            value={signInDisplayName}
-            onChange={(event) => {
-              setSignInDisplayName(event.target.value);
-              if (signInError) {
-                setSignInError('');
-              }
-            }}
-            autoComplete="nickname"
-            spellCheck={false}
-            placeholder="Your display name"
-            maxLength={64}
-          />
-        </label>
-      ) : null}
+      <label className="month-picker" htmlFor="join-display-name-input">
+        Display Name
+        <input
+          id="join-display-name-input"
+          type="text"
+          value={signInDisplayName}
+          onChange={(event) => {
+            setSignInDisplayName(event.target.value);
+            if (signInError) {
+              setSignInError('');
+            }
+          }}
+          autoComplete="nickname"
+          spellCheck={false}
+          placeholder={currentUser ? currentUser.alias : 'Your display name'}
+          maxLength={64}
+        />
+      </label>
       <label className="month-picker" htmlFor="join-campaign-code-input">
         Join Campaign
         <input
