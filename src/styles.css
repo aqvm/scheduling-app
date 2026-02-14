@@ -138,6 +138,16 @@ select {
   font-size: 0.9rem;
 }
 
+.legal-note {
+  margin: 0.85rem 0 0;
+  font-size: 0.84rem;
+  color: #9db0c6;
+}
+
+.legal-note a {
+  color: #9dcfff;
+}
+
 .primary-button,
 .ghost-button,
 .paint-button {
@@ -404,9 +414,21 @@ select {
   background: rgba(14, 22, 35, 0.84);
 }
 
+.summary-row-all-available {
+  border-color: rgba(94, 196, 126, 0.85);
+  background: linear-gradient(135deg, rgba(26, 95, 56, 0.5), rgba(13, 30, 23, 0.92));
+  box-shadow: 0 0 0 1px rgba(86, 181, 117, 0.28);
+}
+
 .summary-score {
   color: #9ec7ff;
   font-weight: 700;
+}
+
+.all-available-badge {
+  color: #b8f7ca;
+  font-weight: 700;
+  font-size: 0.84rem;
 }
 
 .empty-note {
@@ -441,6 +463,14 @@ th {
 
 .score-row.score-negative {
   background: rgba(77, 28, 28, 0.26);
+}
+
+.score-row.score-all-available {
+  background: rgba(20, 84, 48, 0.46);
+}
+
+.score-row.score-all-available td {
+  border-color: rgba(88, 188, 121, 0.42);
 }
 
 .score-pill {
@@ -522,6 +552,21 @@ th {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   font-size: 0.72rem;
+}
+
+.admin-actions {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.danger-button {
+  border-color: rgba(209, 95, 95, 0.6);
+  color: #ffdede;
+}
+
+.danger-button:hover {
+  background: rgba(114, 33, 33, 0.58);
 }
 
 @media (max-width: 820px) {

@@ -23,6 +23,9 @@ Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
 4. Create a Firestore database in production mode.
 5. Copy `.env.example` to `.env.local` and fill in your Firebase values.
 6. In GitHub repo settings, add Actions secrets for Firebase (list below).
+7. Set your OAuth privacy policy URL to:
+   - `https://<your-domain>/privacy-policy.html`
+   - For GitHub Pages, this is typically `https://<username>.github.io/scheduling-app/privacy-policy.html`.
 
 Required env vars:
 

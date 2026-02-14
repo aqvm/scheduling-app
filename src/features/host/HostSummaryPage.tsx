@@ -37,6 +37,7 @@ export function HostSummaryPage({
   getStatus
 }: HostSummaryPageProps) {
   const canView = currentUser.role === 'admin' || currentUser.id === hostUserId;
+  const totalPlayers = users.length;
   const todayDateKey = toDateKey(new Date());
   const futureDateKeys = monthDateKeys.filter((dateKey) => dateKey >= todayDateKey);
 
@@ -55,6 +56,7 @@ export function HostSummaryPage({
   const anyRedDates = futureDateKeys.filter((dateKey) =>
     users.some((user) => getStatus(user.id, dateKey) === 'unavailable')
   );
+  const allAvailableDateKeys = new Set(allGreenDates);
 
   const rankedDateSummaries = useMemo(() => {
     const dateSummaries: DateScoreSummary[] = futureDateKeys.map((dateKey) => {
@@ -141,13 +143,20 @@ export function HostSummaryPage({
         ) : (
           <ul className="list-reset">
             {topCandidateDates.map((dateSummary) => (
-              <li key={dateSummary.dateKey} className="summary-row">
+              <li
+                key={dateSummary.dateKey}
+                className={`summary-row ${allAvailableDateKeys.has(dateSummary.dateKey) ? 'summary-row-all-available' : ''}`}
+              >
                 <strong>{formatDateKey(dateSummary.dateKey)}</strong>
                 <span className="summary-score">Score: {dateSummary.score}</span>
                 <span>
-                  Available {dateSummary.availableCount} | Maybe {dateSummary.maybeCount} | Unavailable{' '}
-                  {dateSummary.unavailableCount}
+                  Available {dateSummary.availableCount}/{totalPlayers} | Maybe{' '}
+                  {dateSummary.maybeCount}/{totalPlayers} | Unavailable{' '}
+                  {dateSummary.unavailableCount}/{totalPlayers}
                 </span>
+                {allAvailableDateKeys.has(dateSummary.dateKey) ? (
+                  <span className="all-available-badge">All players are available</span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -172,7 +181,10 @@ export function HostSummaryPage({
               </thead>
               <tbody>
                 {rankedDateSummaries.map((dateSummary) => (
-                  <tr key={dateSummary.dateKey} className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
+                  <tr
+                    key={dateSummary.dateKey}
+                    className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'} ${allAvailableDateKeys.has(dateSummary.dateKey) ? 'score-all-available' : ''}`}
+                  >
                     <td>{formatDateKey(dateSummary.dateKey)}</td>
                     <td>
                       <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
