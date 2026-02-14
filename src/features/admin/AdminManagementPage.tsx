@@ -1,47 +1,51 @@
 import { useState } from 'react';
-import type { CampaignInvite, UserProfile, UserRole } from '../../shared/scheduler/types';
+import type { Campaign, UserProfile } from '../../shared/scheduler/types';
 
 /**
  * Props used by the admin-only management page.
  */
 type AdminManagementPageProps = {
   currentUser: UserProfile;
-  campaignId: string;
+  selectedCampaign: Campaign | null;
   users: UserProfile[];
   hostUserId: string;
   setHostUserId: (userId: string) => void;
-  invites: CampaignInvite[];
-  latestInviteCode: string;
-  inviteError: string;
-  isCreatingInvite: boolean;
-  onCreateInvite: (role: UserRole) => void;
-  onRevokeInvite: (code: string) => void;
+  managementError: string;
+  isCreatingCampaign: boolean;
+  isUpdatingInvite: boolean;
+  removingUserId: string;
+  onCreateCampaign: (campaignName: string) => void;
+  onSetInviteEnabled: (enabled: boolean) => void;
+  onKickUser: (userId: string) => void;
 };
 
 /**
  * Admin management screen:
- * - create/revoke invite codes
+ * - create campaigns
+ * - enable/disable selected campaign invite code
  * - assign host user
+ * - kick users from selected campaign
  */
 export function AdminManagementPage({
   currentUser,
-  campaignId,
+  selectedCampaign,
   users,
   hostUserId,
   setHostUserId,
-  invites,
-  latestInviteCode,
-  inviteError,
-  isCreatingInvite,
-  onCreateInvite,
-  onRevokeInvite
+  managementError,
+  isCreatingCampaign,
+  isUpdatingInvite,
+  removingUserId,
+  onCreateCampaign,
+  onSetInviteEnabled,
+  onKickUser
 }: AdminManagementPageProps) {
-  const [newInviteRole, setNewInviteRole] = useState<UserRole>('member');
+  const [campaignName, setCampaignName] = useState('');
 
   if (currentUser.role !== 'admin') {
     return (
       <section className="page-card">
-        <h2>Admin Management</h2>
+        <h2>Campaign Management</h2>
         <p>Only admin can access this page.</p>
       </section>
     );
@@ -49,80 +53,83 @@ export function AdminManagementPage({
 
   return (
     <section className="page-card">
-      <h2>Admin Management</h2>
-      <p>Campaign {campaignId} invites, users, and host assignment.</p>
+      <h2>Campaign Management</h2>
+      <p>Create campaigns, control invite code state, assign host, and remove users.</p>
 
       <section className="summary-block">
-        <h3>Campaign Invites</h3>
-        <div className="invite-create-row">
-          <label className="month-picker" htmlFor="invite-role-select">
-            Role
-            <select
-              id="invite-role-select"
-              value={newInviteRole}
-              onChange={(event) => setNewInviteRole(event.target.value === 'admin' ? 'admin' : 'member')}
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
+        <h3>Create Campaign</h3>
+        <form
+          className="invite-create-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onCreateCampaign(campaignName);
+            setCampaignName('');
+          }}
+        >
+          <label className="month-picker" htmlFor="campaign-name-input">
+            Campaign Name
+            <input
+              id="campaign-name-input"
+              type="text"
+              value={campaignName}
+              onChange={(event) => setCampaignName(event.target.value)}
+              maxLength={64}
+              required
+            />
           </label>
           <button
-            type="button"
+            type="submit"
             className="primary-button"
-            onClick={() => onCreateInvite(newInviteRole)}
-            disabled={isCreatingInvite}
+            disabled={isCreatingCampaign}
           >
-            {isCreatingInvite ? 'Creating...' : 'Create Invite Code'}
+            {isCreatingCampaign ? 'Creating...' : 'Create Campaign'}
           </button>
-        </div>
-
-        {latestInviteCode ? (
-          <p>
-            Latest invite: <code>{latestInviteCode}</code>
-          </p>
-        ) : null}
-        {inviteError ? <p className="form-error">{inviteError}</p> : null}
-
-        <div className="admin-list">
-          {invites.length === 0 ? (
-            <p className="empty-note">No invite codes created yet.</p>
-          ) : (
-            invites.map((invite) => (
-              <div key={invite.code} className="admin-row">
-                <span>
-                  <strong>{invite.code.toUpperCase()}</strong>
-                  <small>{invite.role === 'admin' ? 'Admin Invite' : 'Member Invite'}</small>
-                  <small>
-                    {invite.revoked
-                      ? 'Revoked'
-                      : invite.redeemedByUid
-                        ? `Redeemed by ${invite.redeemedByUid}`
-                        : 'Active'}
-                  </small>
-                </span>
-                {!invite.revoked && !invite.redeemedByUid ? (
-                  <button type="button" className="ghost-button" onClick={() => onRevokeInvite(invite.code)}>
-                    Revoke
-                  </button>
-                ) : null}
-              </div>
-            ))
-          )}
-        </div>
+        </form>
       </section>
 
       <section className="summary-block">
+        <h3>Selected Campaign Invite</h3>
+        {!selectedCampaign ? (
+          <p className="empty-note">Select a campaign first.</p>
+        ) : (
+          <div className="admin-list">
+            <div className="admin-row">
+              <span>
+                <strong>{selectedCampaign.name}</strong>
+                <small>
+                  Invite code: <code>{selectedCampaign.inviteCode.toUpperCase()}</code>
+                </small>
+                <small>{selectedCampaign.inviteEnabled ? 'Invite Active' : 'Invite Disabled'}</small>
+              </span>
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={isUpdatingInvite}
+                onClick={() => onSetInviteEnabled(!selectedCampaign.inviteEnabled)}
+              >
+                {selectedCampaign.inviteEnabled ? 'Disable Invite' : 'Enable Invite'}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {managementError ? <p className="form-error">{managementError}</p> : null}
+
+      <section className="summary-block">
         <h3>Host Assignment</h3>
+        {!selectedCampaign ? (
+          <p className="empty-note">Select a campaign first.</p>
+        ) : null}
         <div className="admin-list">
           {users.length === 0 ? (
-            <p className="empty-note">No users have signed in yet.</p>
+            <p className="empty-note">No users are in this campaign yet.</p>
           ) : (
             users.map((user) => (
               <label key={user.id} className="admin-row">
                 <span>
                   <strong>{user.name}</strong>
                   <small>{user.email || 'No email on file yet'}</small>
-                  <small>{user.role === 'admin' ? 'Admin' : 'Member'}</small>
                 </span>
                 <input
                   type="radio"
@@ -134,6 +141,36 @@ export function AdminManagementPage({
             ))
           )}
         </div>
+      </section>
+
+      <section className="summary-block">
+        <h3>Campaign Members</h3>
+        {!selectedCampaign ? (
+          <p className="empty-note">Select a campaign first.</p>
+        ) : (
+          <div className="admin-list">
+            {users.length === 0 ? (
+              <p className="empty-note">No users are in this campaign yet.</p>
+            ) : (
+              users.map((user) => (
+                <div key={`remove-${user.id}`} className="admin-row">
+                  <span>
+                    <strong>{user.name}</strong>
+                    <small>{user.email || 'No email on file yet'}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={user.id === currentUser.id || removingUserId === user.id}
+                    onClick={() => onKickUser(user.id)}
+                  >
+                    {removingUserId === user.id ? 'Removing...' : user.id === currentUser.id ? 'Current Admin' : 'Kick'}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </section>
     </section>
   );

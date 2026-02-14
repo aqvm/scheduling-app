@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { formatDateKey } from '../../shared/scheduler/date';
+import { formatDateKey, toDateKey } from '../../shared/scheduler/date';
 import { getStatusLabel, getStatusScore } from '../../shared/scheduler/status';
 import type { AvailabilityStatus, UserProfile } from '../../shared/scheduler/types';
 
@@ -37,6 +37,8 @@ export function HostSummaryPage({
   getStatus
 }: HostSummaryPageProps) {
   const canView = currentUser.role === 'admin' || currentUser.id === hostUserId;
+  const todayDateKey = toDateKey(new Date());
+  const futureDateKeys = monthDateKeys.filter((dateKey) => dateKey >= todayDateKey);
 
   if (!canView) {
     return (
@@ -47,15 +49,15 @@ export function HostSummaryPage({
     );
   }
 
-  const allGreenDates = monthDateKeys.filter(
+  const allGreenDates = futureDateKeys.filter(
     (dateKey) => users.length > 0 && users.every((user) => getStatus(user.id, dateKey) === 'available')
   );
-  const anyRedDates = monthDateKeys.filter((dateKey) =>
+  const anyRedDates = futureDateKeys.filter((dateKey) =>
     users.some((user) => getStatus(user.id, dateKey) === 'unavailable')
   );
 
   const rankedDateSummaries = useMemo(() => {
-    const dateSummaries: DateScoreSummary[] = monthDateKeys.map((dateKey) => {
+    const dateSummaries: DateScoreSummary[] = futureDateKeys.map((dateKey) => {
       let availableCount = 0;
       let maybeCount = 0;
       let unavailableCount = 0;
@@ -110,20 +112,18 @@ export function HostSummaryPage({
 
       return left.dateKey.localeCompare(right.dateKey);
     });
-  }, [monthDateKeys, users, getStatus]);
+  }, [futureDateKeys, users, getStatus]);
 
-  const topCandidateDates = rankedDateSummaries.slice(0, 5);
+  const topCandidateDates = rankedDateSummaries
+    .filter((dateSummary) => dateSummary.availableCount + dateSummary.maybeCount + dateSummary.unavailableCount > 0)
+    .slice(0, 5);
 
   return (
     <section className="page-card">
       <h2>Host Summary</h2>
-      <p>Month view for all signed-in users.</p>
+      <p>Month view for campaign members. Past dates are hidden.</p>
 
       <div className="kpi-grid">
-        <article>
-          <h3>{users.length}</h3>
-          <p>Total Signed-In Users</p>
-        </article>
         <article>
           <h3>{allGreenDates.length}</h3>
           <p>Dates Fully Green</p>
@@ -156,39 +156,43 @@ export function HostSummaryPage({
 
       <section className="summary-block">
         <h3>Availability Matrix</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Score</th>
-                {users.map((user) => (
-                  <th key={user.id}>{user.name}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rankedDateSummaries.map((dateSummary) => (
-                <tr key={dateSummary.dateKey} className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
-                  <td>{formatDateKey(dateSummary.dateKey)}</td>
-                  <td>
-                    <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
-                      {dateSummary.score}
-                    </span>
-                  </td>
-                  {users.map((user) => {
-                    const status = getStatus(user.id, dateSummary.dateKey);
-                    return (
-                      <td key={`${dateSummary.dateKey}-${user.id}`}>
-                        <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
-                      </td>
-                    );
-                  })}
+        {rankedDateSummaries.length === 0 ? (
+          <p className="empty-note">No current or future dates in this month.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Score</th>
+                  {users.map((user) => (
+                    <th key={user.id}>{user.name}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rankedDateSummaries.map((dateSummary) => (
+                  <tr key={dateSummary.dateKey} className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
+                    <td>{formatDateKey(dateSummary.dateKey)}</td>
+                    <td>
+                      <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
+                        {dateSummary.score}
+                      </span>
+                    </td>
+                    {users.map((user) => {
+                      const status = getStatus(user.id, dateSummary.dateKey);
+                      return (
+                        <td key={`${dateSummary.dateKey}-${user.id}`}>
+                          <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </section>
   );

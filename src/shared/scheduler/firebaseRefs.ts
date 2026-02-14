@@ -3,12 +3,12 @@ import { db } from '../../firebase';
 import { APP_NAMESPACE } from './constants';
 
 /**
- * This file provides Firestore reference builders scoped to the active campaign.
+ * This file provides Firestore reference builders scoped to the app namespace.
  * Returning `null` when Firebase is unavailable keeps caller logic explicit.
  */
 
 /**
- * Root campaign document reference: `apps/{APP_NAMESPACE}`.
+ * Root app namespace document reference: `apps/{APP_NAMESPACE}`.
  */
 export function getAppDocumentRef() {
   if (!db) {
@@ -19,7 +19,7 @@ export function getAppDocumentRef() {
 }
 
 /**
- * Users collection reference: `apps/{campaign}/users`.
+ * Users collection reference: `apps/{namespace}/users`.
  */
 export function getUsersCollectionRef() {
   const appRef = getAppDocumentRef();
@@ -27,7 +27,7 @@ export function getUsersCollectionRef() {
 }
 
 /**
- * Availability collection reference: `apps/{campaign}/availability`.
+ * Availability collection reference: `apps/{namespace}/availability`.
  */
 export function getAvailabilityCollectionRef() {
   const appRef = getAppDocumentRef();
@@ -35,17 +35,41 @@ export function getAvailabilityCollectionRef() {
 }
 
 /**
- * Settings document reference: `apps/{campaign}/meta/settings`.
+ * Campaign settings collection reference: `apps/{namespace}/campaignSettings`.
  */
-export function getSettingsDocumentRef() {
+export function getCampaignSettingsCollectionRef() {
   const appRef = getAppDocumentRef();
-  return appRef ? doc(appRef, 'meta', 'settings') : null;
+  return appRef ? collection(appRef, 'campaignSettings') : null;
 }
 
 /**
- * Invite collection reference: `apps/{campaign}/campaignInvites`.
+ * Settings document reference for one campaign.
+ */
+export function getCampaignSettingsDocumentRef(campaignId: string) {
+  const settingsRef = getCampaignSettingsCollectionRef();
+  return settingsRef ? doc(settingsRef, campaignId) : null;
+}
+
+/**
+ * Invite collection reference: `apps/{namespace}/campaignInvites`.
  */
 export function getCampaignInvitesCollectionRef() {
   const appRef = getAppDocumentRef();
   return appRef ? collection(appRef, 'campaignInvites') : null;
+}
+
+/**
+ * Campaigns collection reference: `apps/{namespace}/campaigns`.
+ */
+export function getCampaignsCollectionRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? collection(appRef, 'campaigns') : null;
+}
+
+/**
+ * Memberships collection reference: `apps/{namespace}/memberships`.
+ */
+export function getMembershipsCollectionRef() {
+  const appRef = getAppDocumentRef();
+  return appRef ? collection(appRef, 'memberships') : null;
 }

@@ -53,8 +53,8 @@ export function SignInPage({
       <h2>Join Scheduler</h2>
       <p>
         {hasGoogleSession
-          ? 'Google account connected. Enter your invite code and username to access the calendar.'
-          : 'Sign in with Google first, then enter your invite code and username.'}
+          ? 'Google account connected. Enter your username. Add an invite code to join a campaign.'
+          : 'Sign in with Google first, then enter your username and campaign invite code.'}
       </p>
 
       {hasGoogleSession ? (
@@ -80,14 +80,13 @@ export function SignInPage({
           </label>
 
           <label htmlFor="invite-code-input">
-            Invite Code
+            Campaign Invite Code (Optional for returning users)
             <input
               id="invite-code-input"
               type="password"
               value={inviteCode}
               onChange={(event) => setInviteCode(event.target.value)}
               autoComplete="off"
-              required
             />
           </label>
 
