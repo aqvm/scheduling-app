@@ -124,6 +124,7 @@ export default function App() {
   const [isJoinCampaignDialogOpen, setIsJoinCampaignDialogOpen] = useState(false);
   const [joinCampaignNameInput, setJoinCampaignNameInput] = useState('');
   const [joinCampaignInviteInput, setJoinCampaignInviteInput] = useState('');
+  const [joinCampaignError, setJoinCampaignError] = useState('');
   const [isNameChangeDialogOpen, setIsNameChangeDialogOpen] = useState(false);
   const [nameChangeNameInput, setNameChangeNameInput] = useState('');
   const [isJoiningCampaign, setIsJoiningCampaign] = useState(false);
@@ -796,27 +797,27 @@ export default function App() {
     const requestedAlias = normalizeName(nameInput);
 
     if (!signedInUserId) {
-      setSignInError('Sign in with Google first.');
+      setJoinCampaignError('Sign in with Google first.');
       return;
     }
 
     if (!isSignedInWithGoogle(authUser)) {
-      setSignInError('Google sign-in session is missing. Please continue with Google again.');
+      setJoinCampaignError('Google sign-in session is missing. Please continue with Google again.');
       return;
     }
 
     if (requestedAlias.length > 64) {
-      setSignInError('Name must be 64 characters or fewer.');
+      setJoinCampaignError('Name must be 64 characters or fewer.');
       return;
     }
 
     if (!db) {
-      setSignInError('Firebase is not configured.');
+      setJoinCampaignError('Firebase is not configured.');
       return;
     }
 
     if (!inviteCode) {
-      setSignInError('Campaign invite code is required to join a campaign.');
+      setJoinCampaignError('Campaign invite code is required to join a campaign.');
       return;
     }
 
@@ -824,13 +825,13 @@ export default function App() {
     const invitesRef = getCampaignInvitesCollectionRef();
     const membershipsRef = getMembershipsCollectionRef();
     if (!usersRef || !invitesRef || !membershipsRef) {
-      setSignInError('Firebase is not configured.');
+      setJoinCampaignError('Firebase is not configured.');
       return;
     }
 
     const userDocRef = doc(usersRef, signedInUserId);
 
-    setSignInError('');
+    setJoinCampaignError('');
     setNameChangeInfo('');
     setIsJoiningCampaign(true);
 
@@ -949,12 +950,12 @@ export default function App() {
         setJoinCampaignNameInput('');
         setJoinCampaignInviteInput('');
         setIsJoinCampaignDialogOpen(false);
-        setSignInError('');
+        setJoinCampaignError('');
         setNameChangeInfo('');
         setAppError('');
       })
       .catch((error: unknown) => {
-        setSignInError(formatFirebaseError(error, 'Unable to join campaign at this time.'));
+        setJoinCampaignError(formatFirebaseError(error, 'Unable to join campaign at this time.'));
       })
       .finally(() => {
         setIsJoiningCampaign(false);
@@ -1615,6 +1616,7 @@ export default function App() {
   const onOpenJoinCampaignDialog = (): void => {
     setSignInError('');
     setNameChangeInfo('');
+    setJoinCampaignError('');
     setJoinCampaignNameInput(selectedMembershipAlias || displayAlias || '');
     setJoinCampaignInviteInput('');
     setIsJoinCampaignDialogOpen(true);
@@ -1664,8 +1666,8 @@ export default function App() {
               value={joinCampaignNameInput}
               onChange={(event) => {
                 setJoinCampaignNameInput(event.target.value);
-                if (signInError) {
-                  setSignInError('');
+                if (joinCampaignError) {
+                  setJoinCampaignError('');
                 }
               }}
               autoComplete="nickname"
@@ -1682,8 +1684,8 @@ export default function App() {
               value={joinCampaignInviteInput}
               onChange={(event) => {
                 setJoinCampaignInviteInput(event.target.value);
-                if (signInError) {
-                  setSignInError('');
+                if (joinCampaignError) {
+                  setJoinCampaignError('');
                 }
               }}
               autoComplete="off"
@@ -1692,6 +1694,7 @@ export default function App() {
               maxLength={32}
             />
           </label>
+          {joinCampaignError ? <p className="form-error">{joinCampaignError}</p> : null}
           <div className="modal-actions">
             <button type="submit" className="primary-button" disabled={isJoiningCampaign}>
               {isJoiningCampaign ? 'Joining...' : 'Join Campaign'}
@@ -1699,7 +1702,10 @@ export default function App() {
             <button
               type="button"
               className="ghost-button"
-              onClick={() => setIsJoinCampaignDialogOpen(false)}
+              onClick={() => {
+                setJoinCampaignError('');
+                setIsJoinCampaignDialogOpen(false);
+              }}
               disabled={isJoiningCampaign}
             >
               Cancel
