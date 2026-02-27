@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDateKey, getMonthDates, getMonthLabel, toDateKey } from '../../shared/scheduler/date';
 import { MonthNavigator } from '../../shared/scheduler/MonthNavigator';
 import { getStatusLabel, getStatusScore } from '../../shared/scheduler/status';
@@ -60,6 +60,10 @@ export function HostSummaryPage({
   const todayDateKey = toDateKey(new Date());
   const futureDateKeys = monthDateKeys.filter((dateKey) => dateKey >= todayDateKey);
   const monthLabel = getMonthLabel(getMonthDates(monthValue));
+  const matrixTableWrapRef = useRef<HTMLDivElement | null>(null);
+  const matrixStickyScrollbarRef = useRef<HTMLDivElement | null>(null);
+  const [matrixScrollbarWidth, setMatrixScrollbarWidth] = useState(0);
+  const [showMatrixStickyScrollbar, setShowMatrixStickyScrollbar] = useState(false);
 
   if (!canView) {
     return (
@@ -140,6 +144,70 @@ export function HostSummaryPage({
     .filter((dateSummary) => dateSummary.availableCount + dateSummary.maybeCount + dateSummary.unavailableCount > 0)
     .slice(0, 5);
 
+  useEffect(() => {
+    const tableWrapElement = matrixTableWrapRef.current;
+    const stickyScrollbarElement = matrixStickyScrollbarRef.current;
+    if (!tableWrapElement || !stickyScrollbarElement) {
+      return;
+    }
+
+    let syncingFromTable = false;
+    let syncingFromStickyScrollbar = false;
+
+    const syncDimensions = () => {
+      const scrollWidth = tableWrapElement.scrollWidth;
+      const clientWidth = tableWrapElement.clientWidth;
+      const hasHorizontalOverflow = scrollWidth > clientWidth + 1;
+
+      setMatrixScrollbarWidth(scrollWidth);
+      setShowMatrixStickyScrollbar(hasHorizontalOverflow);
+
+      if (hasHorizontalOverflow) {
+        stickyScrollbarElement.scrollLeft = tableWrapElement.scrollLeft;
+      }
+    };
+
+    const onTableScroll = () => {
+      if (syncingFromStickyScrollbar) {
+        return;
+      }
+
+      syncingFromTable = true;
+      stickyScrollbarElement.scrollLeft = tableWrapElement.scrollLeft;
+      syncingFromTable = false;
+    };
+
+    const onStickyScrollbarScroll = () => {
+      if (syncingFromTable) {
+        return;
+      }
+
+      syncingFromStickyScrollbar = true;
+      tableWrapElement.scrollLeft = stickyScrollbarElement.scrollLeft;
+      syncingFromStickyScrollbar = false;
+    };
+
+    const resizeObserver = new ResizeObserver(syncDimensions);
+    resizeObserver.observe(tableWrapElement);
+
+    const tableElement = tableWrapElement.querySelector('table');
+    if (tableElement) {
+      resizeObserver.observe(tableElement);
+    }
+
+    tableWrapElement.addEventListener('scroll', onTableScroll, { passive: true });
+    stickyScrollbarElement.addEventListener('scroll', onStickyScrollbarScroll, { passive: true });
+    window.addEventListener('resize', syncDimensions);
+    syncDimensions();
+
+    return () => {
+      resizeObserver.disconnect();
+      tableWrapElement.removeEventListener('scroll', onTableScroll);
+      stickyScrollbarElement.removeEventListener('scroll', onStickyScrollbarScroll);
+      window.removeEventListener('resize', syncDimensions);
+    };
+  }, [rankedDateSummaries.length, users.length]);
+
   return (
     <section className="page-card">
       <h2>Host Summary</h2>
@@ -196,46 +264,55 @@ export function HostSummaryPage({
         {rankedDateSummaries.length === 0 ? (
           <p className="empty-note">No current or future dates in this month.</p>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Score</th>
-                  {users.map((user) => (
-                    <th key={user.id}>{user.alias}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rankedDateSummaries.map((dateSummary, index) => (
-                  <tr
-                    key={dateSummary.dateKey}
-                    className={`score-row matrix-row-${index % 2 === 0 ? 'odd' : 'even'} score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'} ${allAvailableDateKeys.has(dateSummary.dateKey) ? 'score-all-available' : ''}`}
-                  >
-                    <td>{formatDateKey(dateSummary.dateKey)}</td>
-                    <td>
-                      <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
-                        {dateSummary.score}
-                      </span>
-                    </td>
-                    {users.map((user) => {
-                      const status = getStatus(user.id, dateSummary.dateKey);
-                      return (
-                        <td key={`${dateSummary.dateKey}-${user.id}`}>
-                          <span className={`status-pill status-${status}`}>
-                            <span className="status-long">{getStatusLabel(status)}</span>
-                            <span className="status-short" aria-hidden="true">
-                              {getCompactStatusLabel(status)}
-                            </span>
-                          </span>
-                        </td>
-                      );
-                    })}
+          <div className="matrix-scroll-shell">
+            <div className="table-wrap matrix-table-wrap" ref={matrixTableWrapRef}>
+              <table className="availability-matrix-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Score</th>
+                    {users.map((user) => (
+                      <th key={user.id}>{user.alias}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rankedDateSummaries.map((dateSummary, index) => (
+                    <tr
+                      key={dateSummary.dateKey}
+                      className={`score-row matrix-row-${index % 2 === 0 ? 'odd' : 'even'} score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'} ${allAvailableDateKeys.has(dateSummary.dateKey) ? 'score-all-available' : ''}`}
+                    >
+                      <td>{formatDateKey(dateSummary.dateKey)}</td>
+                      <td>
+                        <span className={`score-pill score-pill-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'}`}>
+                          {dateSummary.score}
+                        </span>
+                      </td>
+                      {users.map((user) => {
+                        const status = getStatus(user.id, dateSummary.dateKey);
+                        return (
+                          <td key={`${dateSummary.dateKey}-${user.id}`}>
+                            <span className={`status-pill status-${status}`}>
+                              <span className="status-long">{getStatusLabel(status)}</span>
+                              <span className="status-short" aria-hidden="true">
+                                {getCompactStatusLabel(status)}
+                              </span>
+                            </span>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div
+              ref={matrixStickyScrollbarRef}
+              className={`matrix-sticky-scrollbar ${showMatrixStickyScrollbar ? '' : 'matrix-sticky-scrollbar-hidden'}`.trim()}
+              aria-hidden="true"
+            >
+              <div className="matrix-sticky-scrollbar-track" style={{ width: `${matrixScrollbarWidth}px` }} />
+            </div>
           </div>
         )}
       </section>
