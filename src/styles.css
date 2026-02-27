@@ -632,7 +632,7 @@ th {
   left: 0;
   z-index: 6;
   min-width: 8.8rem;
-  background: rgba(19, 35, 55, 0.96);
+  background: rgba(19, 35, 55, 1);
 }
 
 .availability-matrix-table td:first-child {
@@ -640,7 +640,7 @@ th {
   left: 0;
   z-index: 3;
   min-width: 8.8rem;
-  background: linear-gradient(var(--score-row-stripe), var(--score-row-stripe)), var(--score-row-base);
+  background: var(--date-col-base);
 }
 
 .availability-matrix-table th:first-child,
@@ -650,18 +650,22 @@ th {
 
 .score-row.score-positive {
   --score-row-base: rgba(17, 59, 40, 0.26);
+  --date-col-base: rgba(13, 41, 31, 0.98);
 }
 
 .score-row.score-negative {
   --score-row-base: rgba(77, 28, 28, 0.26);
+  --date-col-base: rgba(50, 18, 18, 0.98);
 }
 
 .score-row.score-neutral {
   --score-row-base: rgba(48, 61, 76, 0.2);
+  --date-col-base: rgba(29, 38, 48, 0.98);
 }
 
 .score-row.score-all-available {
   --score-row-base: rgba(20, 84, 48, 0.46);
+  --date-col-base: rgba(12, 54, 31, 0.98);
 }
 
 .score-row.score-all-available td {
@@ -671,6 +675,7 @@ th {
 .score-row {
   --score-row-base: transparent;
   --score-row-stripe: transparent;
+  --date-col-base: rgba(17, 26, 39, 0.98);
 }
 
 .score-row.matrix-row-odd {
