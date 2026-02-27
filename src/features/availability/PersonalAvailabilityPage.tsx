@@ -1,13 +1,7 @@
-import { useRef, type WheelEvent } from 'react';
-import { MONTH_NAME_OPTIONS, PAINT_OPTIONS, WEEKDAY_LABELS } from '../../shared/scheduler/constants';
-import {
-  formatDateKey,
-  getMonthLabel,
-  padTwo,
-  parseMonthValue,
-  shiftMonthValue,
-  toDateKey
-} from '../../shared/scheduler/date';
+import { useEffect, useRef } from 'react';
+import { PAINT_OPTIONS, WEEKDAY_LABELS } from '../../shared/scheduler/constants';
+import { formatDateKey, getMonthLabel, shiftMonthValue, toDateKey } from '../../shared/scheduler/date';
+import { MonthNavigator } from '../../shared/scheduler/MonthNavigator';
 import { getStatusLabel } from '../../shared/scheduler/status';
 import type { AvailabilityStatus, UserProfile } from '../../shared/scheduler/types';
 
@@ -53,19 +47,14 @@ type PersonalAvailabilityPageProps = {
   getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
 
   /**
-   * Mouse-down handler that starts drag painting.
-   */
-  onStartPaint: (dateKey: string) => void;
-
-  /**
-   * Mouse-enter handler used while drag painting is active.
-   */
-  onPaintWhileDragging: (dateKey: string) => void;
-
-  /**
-   * Single-cell click paint action.
+   * Paint action used while dragging across day cells.
    */
   onPaintDate: (dateKey: string) => void;
+
+  /**
+   * Toggles a single day through all states for click-only interactions.
+   */
+  onToggleDate: (dateKey: string) => void;
 
   /**
    * Whether there are local edits not yet persisted.
@@ -108,17 +97,22 @@ export function PersonalAvailabilityPage({
   paintStatus,
   setPaintStatus,
   getStatus,
-  onStartPaint,
-  onPaintWhileDragging,
   onPaintDate,
+  onToggleDate,
   hasUnsavedChanges,
   isSaving,
   onSaveChanges
 }: PersonalAvailabilityPageProps) {
   const monthLabel = getMonthLabel(monthDates);
-  const selectedMonthParts = parseMonthValue(monthValue);
-  const yearOptions = Array.from({ length: 11 }, (_, index) => selectedMonthParts.year - 5 + index);
+  const calendarGridRef = useRef<HTMLDivElement | null>(null);
   const wheelSwitchCooldownUntilRef = useRef(0);
+  const monthValueRef = useRef(monthValue);
+  const paintInteractionRef = useRef<{
+    startDateKey: string;
+    didDrag: boolean;
+    lastPaintedDateKey: string | null;
+  } | null>(null);
+  monthValueRef.current = monthValue;
 
   // Build a full rectangular calendar grid by adding null placeholders.
   const leadingEmptyCells = monthDates.length > 0 ? monthDates[0].getDay() : 0;
@@ -128,64 +122,105 @@ export function PersonalAvailabilityPage({
 
   const todayDateKey = toDateKey(new Date());
 
-  const onCalendarWheel = (event: WheelEvent<HTMLDivElement>): void => {
-    if (event.deltaY === 0) {
+  useEffect(() => {
+    const onWindowMouseUp = () => {
+      paintInteractionRef.current = null;
+    };
+
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+  }, []);
+
+  useEffect(() => {
+    const calendarGridElement = calendarGridRef.current;
+    if (!calendarGridElement) {
       return;
     }
 
-    event.preventDefault();
+    const onCalendarWheel = (event: WheelEvent) => {
+      if (event.deltaY === 0) {
+        return;
+      }
 
-    const now = Date.now();
-    if (now < wheelSwitchCooldownUntilRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const now = Date.now();
+      if (now < wheelSwitchCooldownUntilRef.current) {
+        return;
+      }
+
+      wheelSwitchCooldownUntilRef.current = now + CALENDAR_WHEEL_SWITCH_COOLDOWN_MS;
+      setMonthValue(shiftMonthValue(monthValueRef.current, event.deltaY < 0 ? -1 : 1));
+    };
+
+    calendarGridElement.addEventListener('wheel', onCalendarWheel, { passive: false });
+    return () => calendarGridElement.removeEventListener('wheel', onCalendarWheel);
+  }, [setMonthValue]);
+
+  const onDayMouseDown = (dateKey: string): void => {
+    paintInteractionRef.current = {
+      startDateKey: dateKey,
+      didDrag: false,
+      lastPaintedDateKey: null
+    };
+  };
+
+  const onDayMouseEnter = (dateKey: string): void => {
+    const interaction = paintInteractionRef.current;
+    if (!interaction) {
       return;
     }
 
-    wheelSwitchCooldownUntilRef.current = now + CALENDAR_WHEEL_SWITCH_COOLDOWN_MS;
-    setMonthValue(shiftMonthValue(monthValue, event.deltaY < 0 ? -1 : 1));
+    if (!interaction.didDrag && interaction.startDateKey === dateKey) {
+      return;
+    }
+
+    if (!interaction.didDrag) {
+      interaction.didDrag = true;
+      interaction.lastPaintedDateKey = interaction.startDateKey;
+      onPaintDate(interaction.startDateKey);
+    }
+
+    if (interaction.lastPaintedDateKey === dateKey) {
+      return;
+    }
+
+    interaction.lastPaintedDateKey = dateKey;
+    onPaintDate(dateKey);
+  };
+
+  const onDayMouseUp = (dateKey: string): void => {
+    const interaction = paintInteractionRef.current;
+    if (!interaction) {
+      return;
+    }
+
+    if (!interaction.didDrag) {
+      onToggleDate(dateKey);
+      paintInteractionRef.current = null;
+      return;
+    }
+
+    if (interaction.lastPaintedDateKey !== dateKey) {
+      onPaintDate(dateKey);
+    }
+
+    paintInteractionRef.current = null;
   };
 
   return (
     <section className="page-card">
       <h2>My Availability</h2>
-      <p>You can only edit your own schedule. Choose a paint mode, then click and drag across days.</p>
+      <p>Click a day to toggle states, or choose a paint mode and drag across days.</p>
 
       <div className="month-row">
         <h3 className="month-heading">{monthLabel}</h3>
-        <div className="month-picker-group" aria-label="Month picker">
-          <label className="month-picker" htmlFor="month-name-select">
-            Month
-            <select
-              id="month-name-select"
-              value={String(selectedMonthParts.month)}
-              onChange={(event) =>
-                setMonthValue(`${selectedMonthParts.year}-${padTwo(Number(event.target.value))}`)
-              }
-            >
-              {MONTH_NAME_OPTIONS.map((label, index) => (
-                <option key={label} value={String(index + 1)}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="month-picker" htmlFor="month-year-select">
-            Year
-            <select
-              id="month-year-select"
-              value={String(selectedMonthParts.year)}
-              onChange={(event) =>
-                setMonthValue(`${event.target.value}-${padTwo(selectedMonthParts.month)}`)
-              }
-            >
-              {yearOptions.map((year) => (
-                <option key={year} value={String(year)}>
-                  {year}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <MonthNavigator
+          monthValue={monthValue}
+          onChangeMonth={setMonthValue}
+          ariaLabel="My availability month navigation"
+        />
       </div>
 
       <div className="paint-toolbar" role="toolbar" aria-label="Paint status">
@@ -217,9 +252,9 @@ export function PersonalAvailabilityPage({
 
       <div
         className="calendar-grid"
+        ref={calendarGridRef}
         role="grid"
         aria-label={`${monthLabel} availability calendar`}
-        onWheel={onCalendarWheel}
       >
         {WEEKDAY_LABELS.map((weekday) => (
           <div key={weekday} className="weekday-cell" role="columnheader">
@@ -245,19 +280,12 @@ export function PersonalAvailabilityPage({
               type="button"
               className={`day-cell day-${status} ${isPastDate ? 'day-past' : ''} ${isToday ? 'day-today' : ''}`.trim()}
               role="gridcell"
-              onMouseDown={() => {
-                if (!isPastDate) {
-                  onStartPaint(dateKey);
-                }
-              }}
-              onMouseEnter={() => {
-                if (!isPastDate) {
-                  onPaintWhileDragging(dateKey);
-                }
-              }}
-              onClick={() => {
-                if (!isPastDate) {
-                  onPaintDate(dateKey);
+              onMouseDown={() => onDayMouseDown(dateKey)}
+              onMouseEnter={() => onDayMouseEnter(dateKey)}
+              onMouseUp={() => onDayMouseUp(dateKey)}
+              onClick={(event) => {
+                if (event.detail === 0) {
+                  onToggleDate(dateKey);
                 }
               }}
               onDragStart={(event) => event.preventDefault()}

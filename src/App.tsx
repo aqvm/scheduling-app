@@ -26,6 +26,7 @@ import { SignInPage } from './features/auth/SignInPage';
 import { PersonalAvailabilityPage } from './features/availability/PersonalAvailabilityPage';
 import { HostSummaryPage } from './features/host/HostSummaryPage';
 import { getMonthDates, isValidMonthValue, toDateKey, toMonthValue } from './shared/scheduler/date';
+import { getNextStatusInCycle } from './shared/scheduler/status';
 import {
   getAvailabilityCollectionRef,
   getCampaignInvitesCollectionRef,
@@ -110,10 +111,14 @@ export default function App() {
   const [campaignAvailability, setCampaignAvailability] = useState<AvailabilityByUser>({});
   const [hostUserId, setHostUserId] = useState('');
 
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => toMonthValue(new Date()));
+  const [selectedAvailabilityMonth, setSelectedAvailabilityMonth] = useState<string>(() =>
+    toMonthValue(new Date())
+  );
+  const [selectedHostSummaryMonth, setSelectedHostSummaryMonth] = useState<string>(() =>
+    toMonthValue(new Date())
+  );
   const [selectedPaintStatus, setSelectedPaintStatus] = useState<AvailabilityStatus>('available');
   const [pendingEditsByCampaign, setPendingEditsByCampaign] = useState<Record<string, Record<string, AvailabilityStatus>>>({});
-  const [isPainting, setIsPainting] = useState(false);
   const [isSavingChanges, setIsSavingChanges] = useState(false);
 
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
@@ -159,8 +164,18 @@ export default function App() {
   const currentCampaignPendingEdits =
     selectedCampaignId.length > 0 ? pendingEditsByCampaign[selectedCampaignId] ?? {} : {};
   const hasUnsavedChanges = Object.keys(currentCampaignPendingEdits).length > 0;
-  const monthDates = useMemo(() => getMonthDates(selectedMonth), [selectedMonth]);
-  const monthDateKeys = useMemo(() => monthDates.map((date) => toDateKey(date)), [monthDates]);
+  const availabilityMonthDates = useMemo(
+    () => getMonthDates(selectedAvailabilityMonth),
+    [selectedAvailabilityMonth]
+  );
+  const hostSummaryMonthDates = useMemo(
+    () => getMonthDates(selectedHostSummaryMonth),
+    [selectedHostSummaryMonth]
+  );
+  const hostSummaryMonthDateKeys = useMemo(
+    () => hostSummaryMonthDates.map((date) => toDateKey(date)),
+    [hostSummaryMonthDates]
+  );
 
   useEffect(() => {
     if (!auth) {
@@ -640,12 +655,6 @@ export default function App() {
   }, [selectedCampaignId]);
 
   useEffect(() => {
-    const onMouseUp = () => setIsPainting(false);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => window.removeEventListener('mouseup', onMouseUp);
-  }, []);
-
-  useEffect(() => {
     if (!currentUser || !selectedCampaignId) {
       return;
     }
@@ -699,13 +708,12 @@ export default function App() {
     return campaignAvailability[userId]?.[dateKey] ?? 'unspecified';
   };
 
-  const paintDate = (dateKey: string): void => {
+  const setDateStatus = (dateKey: string, nextStatus: AvailabilityStatus): void => {
     if (!currentUser || !selectedCampaignId) {
       return;
     }
 
     const serverStatus = campaignAvailability[currentUser.id]?.[dateKey] ?? 'unspecified';
-    const nextStatus = selectedPaintStatus;
 
     setPendingEditsByCampaign((current) => {
       const campaignPending = current[selectedCampaignId] ?? {};
@@ -729,17 +737,17 @@ export default function App() {
     });
   };
 
-  const onStartPaint = (dateKey: string): void => {
-    setIsPainting(true);
-    paintDate(dateKey);
+  const paintDate = (dateKey: string): void => {
+    setDateStatus(dateKey, selectedPaintStatus);
   };
 
-  const onPaintWhileDragging = (dateKey: string): void => {
-    if (!isPainting) {
+  const toggleDate = (dateKey: string): void => {
+    if (!currentUser) {
       return;
     }
 
-    paintDate(dateKey);
+    const currentStatus = getStatus(currentUser.id, dateKey);
+    setDateStatus(dateKey, getNextStatusInCycle(currentStatus));
   };
 
   const onSaveChanges = (): void => {
@@ -1528,7 +1536,6 @@ export default function App() {
     setAppError('');
     setActiveNameChangeRequest(null);
     setNameChangeRequests([]);
-    setIsPainting(false);
     setPendingEditsByCampaign({});
     setIsSavingChanges(false);
 
@@ -1541,8 +1548,12 @@ export default function App() {
     });
   };
 
-  const onChangeMonth = (nextValue: string): void => {
-    setSelectedMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
+  const onChangeAvailabilityMonth = (nextValue: string): void => {
+    setSelectedAvailabilityMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
+  };
+
+  const onChangeHostSummaryMonth = (nextValue: string): void => {
+    setSelectedHostSummaryMonth(isValidMonthValue(nextValue) ? nextValue : toMonthValue(new Date()));
   };
 
   if (firebaseConfigError) {
@@ -1805,15 +1816,14 @@ export default function App() {
 
   const personalAvailabilityPageProps = {
     currentUser: displayUser ?? currentUser,
-    monthDates,
-    monthValue: selectedMonth,
-    setMonthValue: onChangeMonth,
+    monthDates: availabilityMonthDates,
+    monthValue: selectedAvailabilityMonth,
+    setMonthValue: onChangeAvailabilityMonth,
     paintStatus: selectedPaintStatus,
     setPaintStatus: setSelectedPaintStatus,
     getStatus,
-    onStartPaint,
-    onPaintWhileDragging,
     onPaintDate: paintDate,
+    onToggleDate: toggleDate,
     hasUnsavedChanges,
     isSaving: isSavingChanges,
     onSaveChanges
@@ -1879,7 +1889,9 @@ export default function App() {
                   users={campaignUsers}
                   currentUser={displayUser ?? currentUser}
                   hostUserId={hostUserId}
-                  monthDateKeys={monthDateKeys}
+                  monthValue={selectedHostSummaryMonth}
+                  setMonthValue={onChangeHostSummaryMonth}
+                  monthDateKeys={hostSummaryMonthDateKeys}
                   getStatus={getStatus}
                 />
               ) : selectedCampaign ? (

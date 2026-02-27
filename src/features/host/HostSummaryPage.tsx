@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { formatDateKey, toDateKey } from '../../shared/scheduler/date';
+import { formatDateKey, getMonthDates, getMonthLabel, toDateKey } from '../../shared/scheduler/date';
+import { MonthNavigator } from '../../shared/scheduler/MonthNavigator';
 import { getStatusLabel, getStatusScore } from '../../shared/scheduler/status';
 import type { AvailabilityStatus, UserProfile } from '../../shared/scheduler/types';
 
@@ -22,6 +23,8 @@ type HostSummaryPageProps = {
   users: UserProfile[];
   currentUser: UserProfile;
   hostUserId: string;
+  monthValue: string;
+  setMonthValue: (value: string) => void;
   monthDateKeys: string[];
   getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
 };
@@ -47,6 +50,8 @@ export function HostSummaryPage({
   users,
   currentUser,
   hostUserId,
+  monthValue,
+  setMonthValue,
   monthDateKeys,
   getStatus
 }: HostSummaryPageProps) {
@@ -54,6 +59,7 @@ export function HostSummaryPage({
   const totalPlayers = users.length;
   const todayDateKey = toDateKey(new Date());
   const futureDateKeys = monthDateKeys.filter((dateKey) => dateKey >= todayDateKey);
+  const monthLabel = getMonthLabel(getMonthDates(monthValue));
 
   if (!canView) {
     return (
@@ -138,6 +144,14 @@ export function HostSummaryPage({
     <section className="page-card">
       <h2>Host Summary</h2>
       <p>Month view for campaign members. Past dates are hidden.</p>
+      <div className="month-row">
+        <h3 className="month-heading">{monthLabel}</h3>
+        <MonthNavigator
+          monthValue={monthValue}
+          onChangeMonth={setMonthValue}
+          ariaLabel="Host summary month navigation"
+        />
+      </div>
 
       <div className="kpi-grid">
         <article>

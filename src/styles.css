@@ -272,6 +272,76 @@ select {
   min-width: 120px;
 }
 
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.month-step-button {
+  min-width: 4.6rem;
+}
+
+.month-popover {
+  position: relative;
+}
+
+.month-trigger-button {
+  min-width: 11rem;
+}
+
+.month-popover-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(18.5rem, calc(100vw - 2.5rem));
+  z-index: 30;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(95, 124, 156, 0.38);
+  background: linear-gradient(145deg, rgba(19, 28, 43, 0.98), rgba(9, 15, 24, 0.98));
+  box-shadow: 0 14px 34px rgba(2, 7, 14, 0.55);
+  padding: 0.75rem;
+}
+
+.month-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.65rem;
+}
+
+.month-year-button {
+  padding: 0.2rem 0.5rem;
+}
+
+.month-option-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.month-option-button {
+  border: 1px solid rgba(111, 133, 158, 0.48);
+  border-radius: 0.52rem;
+  padding: 0.36rem 0.3rem;
+  background: rgba(15, 24, 38, 0.92);
+  color: #dce8f6;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.month-option-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(141, 183, 226, 0.72);
+}
+
+.month-option-button-selected {
+  border-color: rgba(141, 183, 226, 0.95);
+  background: rgba(45, 102, 165, 0.44);
+}
+
 .paint-toolbar {
   display: flex;
   gap: 0.65rem;
@@ -324,6 +394,7 @@ select {
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0.5rem;
   user-select: none;
+  overscroll-behavior: contain;
 }
 
 .weekday-cell {
@@ -694,6 +765,27 @@ th {
 
   .top-nav {
     gap: 0.6rem;
+  }
+
+  .month-nav {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .month-trigger-button {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .month-popover {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .month-popover-panel {
+    right: auto;
+    left: 0;
+    width: 100%;
   }
 
   .day-cell,
