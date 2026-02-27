@@ -1659,7 +1659,7 @@ export default function App() {
           }}
         >
           <label className="month-picker" htmlFor="join-campaign-name-input">
-            Name
+            Your Display Name
             <input
               id="join-campaign-name-input"
               type="text"
@@ -1672,12 +1672,12 @@ export default function App() {
               }}
               autoComplete="nickname"
               spellCheck={false}
-              placeholder={selectedMembershipAlias || 'Name for this campaign'}
+              placeholder={selectedMembershipAlias || 'e.g., Alex (not the campaign name)'}
               maxLength={64}
             />
           </label>
           <label className="month-picker" htmlFor="join-campaign-code-input">
-            Join Campaign
+            Campaign Invite Code
             <input
               id="join-campaign-code-input"
               type="text"
