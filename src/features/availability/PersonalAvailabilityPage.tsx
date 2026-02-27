@@ -1,11 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { PAINT_OPTIONS, WEEKDAY_LABELS } from '../../shared/scheduler/constants';
-import { formatDateKey, getMonthLabel, shiftMonthValue, toDateKey } from '../../shared/scheduler/date';
+import { formatDateKey, getMonthLabel, toDateKey } from '../../shared/scheduler/date';
 import { MonthNavigator } from '../../shared/scheduler/MonthNavigator';
 import { getStatusLabel } from '../../shared/scheduler/status';
 import type { AvailabilityStatus, UserProfile } from '../../shared/scheduler/types';
-
-const CALENDAR_WHEEL_SWITCH_COOLDOWN_MS = 220;
 
 /**
  * Props needed by the personal availability editor.
@@ -104,15 +102,11 @@ export function PersonalAvailabilityPage({
   onSaveChanges
 }: PersonalAvailabilityPageProps) {
   const monthLabel = getMonthLabel(monthDates);
-  const calendarGridRef = useRef<HTMLDivElement | null>(null);
-  const wheelSwitchCooldownUntilRef = useRef(0);
-  const monthValueRef = useRef(monthValue);
   const paintInteractionRef = useRef<{
     startDateKey: string;
     didDrag: boolean;
     lastPaintedDateKey: string | null;
   } | null>(null);
-  monthValueRef.current = monthValue;
 
   // Build a full rectangular calendar grid by adding null placeholders.
   const leadingEmptyCells = monthDates.length > 0 ? monthDates[0].getDay() : 0;
@@ -130,33 +124,6 @@ export function PersonalAvailabilityPage({
     window.addEventListener('mouseup', onWindowMouseUp);
     return () => window.removeEventListener('mouseup', onWindowMouseUp);
   }, []);
-
-  useEffect(() => {
-    const calendarGridElement = calendarGridRef.current;
-    if (!calendarGridElement) {
-      return;
-    }
-
-    const onCalendarWheel = (event: WheelEvent) => {
-      if (event.deltaY === 0) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const now = Date.now();
-      if (now < wheelSwitchCooldownUntilRef.current) {
-        return;
-      }
-
-      wheelSwitchCooldownUntilRef.current = now + CALENDAR_WHEEL_SWITCH_COOLDOWN_MS;
-      setMonthValue(shiftMonthValue(monthValueRef.current, event.deltaY < 0 ? -1 : 1));
-    };
-
-    calendarGridElement.addEventListener('wheel', onCalendarWheel, { passive: false });
-    return () => calendarGridElement.removeEventListener('wheel', onCalendarWheel);
-  }, [setMonthValue]);
 
   const onDayMouseDown = (dateKey: string): void => {
     paintInteractionRef.current = {
@@ -250,12 +217,7 @@ export function PersonalAvailabilityPage({
         <span className="save-note">{hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved'}</span>
       </div>
 
-      <div
-        className="calendar-grid"
-        ref={calendarGridRef}
-        role="grid"
-        aria-label={`${monthLabel} availability calendar`}
-      >
+      <div className="calendar-grid" role="grid" aria-label={`${monthLabel} availability calendar`}>
         {WEEKDAY_LABELS.map((weekday) => (
           <div key={weekday} className="weekday-cell" role="columnheader">
             {weekday}

@@ -581,6 +581,35 @@ select {
   overflow-x: auto;
 }
 
+.matrix-scroll-shell {
+  position: relative;
+}
+
+.matrix-table-wrap {
+  overflow-x: auto;
+}
+
+.matrix-sticky-scrollbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 24;
+  margin-top: 0.45rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 0.9rem;
+  border: 1px solid rgba(103, 130, 157, 0.55);
+  border-radius: 999px;
+  background: rgba(8, 15, 24, 0.94);
+}
+
+.matrix-sticky-scrollbar-hidden {
+  display: none;
+}
+
+.matrix-sticky-scrollbar-track {
+  height: 1px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -596,6 +625,27 @@ td {
 
 th {
   background: rgba(19, 35, 55, 0.88);
+}
+
+.availability-matrix-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  min-width: 8.8rem;
+  background: rgba(19, 35, 55, 0.96);
+}
+
+.availability-matrix-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-width: 8.8rem;
+  background: linear-gradient(var(--score-row-stripe), var(--score-row-stripe)), var(--score-row-base);
+}
+
+.availability-matrix-table th:first-child,
+.availability-matrix-table td:first-child {
+  box-shadow: 2px 0 0 rgba(10, 18, 29, 0.85);
 }
 
 .score-row.score-positive {
