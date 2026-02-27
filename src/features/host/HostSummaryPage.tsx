@@ -26,6 +26,20 @@ type HostSummaryPageProps = {
   getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
 };
 
+function getCompactStatusLabel(status: AvailabilityStatus): string {
+  switch (status) {
+    case 'available':
+      return 'Avail';
+    case 'unavailable':
+      return 'No';
+    case 'unspecified':
+      return 'Unset';
+    case 'maybe':
+    default:
+      return 'Maybe';
+  }
+}
+
 /**
  * Read-only analytics view for host/admin users.
  */
@@ -180,10 +194,10 @@ export function HostSummaryPage({
                 </tr>
               </thead>
               <tbody>
-                {rankedDateSummaries.map((dateSummary) => (
+                {rankedDateSummaries.map((dateSummary, index) => (
                   <tr
                     key={dateSummary.dateKey}
-                    className={`score-row score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'} ${allAvailableDateKeys.has(dateSummary.dateKey) ? 'score-all-available' : ''}`}
+                    className={`score-row matrix-row-${index % 2 === 0 ? 'odd' : 'even'} score-${dateSummary.score > 0 ? 'positive' : dateSummary.score < 0 ? 'negative' : 'neutral'} ${allAvailableDateKeys.has(dateSummary.dateKey) ? 'score-all-available' : ''}`}
                   >
                     <td>{formatDateKey(dateSummary.dateKey)}</td>
                     <td>
@@ -195,7 +209,12 @@ export function HostSummaryPage({
                       const status = getStatus(user.id, dateSummary.dateKey);
                       return (
                         <td key={`${dateSummary.dateKey}-${user.id}`}>
-                          <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
+                          <span className={`status-pill status-${status}`}>
+                            <span className="status-long">{getStatusLabel(status)}</span>
+                            <span className="status-short" aria-hidden="true">
+                              {getCompactStatusLabel(status)}
+                            </span>
+                          </span>
                         </td>
                       );
                     })}
