@@ -370,6 +370,23 @@ select {
 .day-status {
   font-size: 0.78rem;
   color: #bbcee4;
+  line-height: 1.2;
+}
+
+.day-status .status-long {
+  display: inline;
+}
+
+.day-status .status-short {
+  display: none;
+}
+
+.status-pill .status-long {
+  display: inline;
+}
+
+.status-pill .status-short {
+  display: none;
 }
 
 .day-unspecified {
@@ -511,19 +528,40 @@ th {
 }
 
 .score-row.score-positive {
-  background: rgba(17, 59, 40, 0.26);
+  --score-row-base: rgba(17, 59, 40, 0.26);
 }
 
 .score-row.score-negative {
-  background: rgba(77, 28, 28, 0.26);
+  --score-row-base: rgba(77, 28, 28, 0.26);
+}
+
+.score-row.score-neutral {
+  --score-row-base: rgba(48, 61, 76, 0.2);
 }
 
 .score-row.score-all-available {
-  background: rgba(20, 84, 48, 0.46);
+  --score-row-base: rgba(20, 84, 48, 0.46);
 }
 
 .score-row.score-all-available td {
   border-color: rgba(88, 188, 121, 0.42);
+}
+
+.score-row {
+  --score-row-base: transparent;
+  --score-row-stripe: transparent;
+}
+
+.score-row.matrix-row-odd {
+  --score-row-stripe: rgba(255, 255, 255, 0.015);
+}
+
+.score-row.matrix-row-even {
+  --score-row-stripe: rgba(255, 255, 255, 0.045);
+}
+
+.score-row td {
+  background: linear-gradient(var(--score-row-stripe), var(--score-row-stripe)), var(--score-row-base);
 }
 
 .score-pill {
@@ -660,10 +698,38 @@ th {
 
   .day-cell,
   .empty-cell {
-    min-height: 70px;
+    min-height: 76px;
+    padding: 0.42rem;
   }
 
   .day-status {
     font-size: 0.72rem;
+  }
+
+  .day-status .status-long {
+    display: none;
+  }
+
+  .day-status .status-short {
+    display: inline;
+  }
+
+  .status-pill .status-long {
+    display: none;
+  }
+
+  .status-pill .status-short {
+    display: inline;
+  }
+
+  th,
+  td {
+    padding: 0.42rem 0.45rem;
+    font-size: 0.84rem;
+  }
+
+  .status-pill {
+    font-size: 0.74rem;
+    padding: 0.16rem 0.46rem;
   }
 }

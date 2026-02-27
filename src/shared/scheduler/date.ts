@@ -53,6 +53,15 @@ export function parseMonthValue(value: string): { year: number; month: number } 
 }
 
 /**
+ * Shifts a month value (`YYYY-MM`) by a number of months and returns the normalized result.
+ */
+export function shiftMonthValue(value: string, monthOffset: number): string {
+  const { year, month } = parseMonthValue(value);
+  const shiftedDate = new Date(year, month - 1 + monthOffset, 1);
+  return toMonthValue(shiftedDate);
+}
+
+/**
  * Expands a month value (`YYYY-MM`) into an array of Date instances for each day.
  */
 export function getMonthDates(monthValue: string): Date[] {
