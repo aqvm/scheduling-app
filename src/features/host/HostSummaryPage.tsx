@@ -154,13 +154,23 @@ export function HostSummaryPage({
     let syncingFromTable = false;
     let syncingFromStickyScrollbar = false;
 
+    const isNativeScrollbarVisible = () => {
+      const tableWrapRect = tableWrapElement.getBoundingClientRect();
+      return (
+        tableWrapRect.bottom <= window.innerHeight &&
+        tableWrapRect.bottom >= 0 &&
+        tableWrapRect.top < window.innerHeight
+      );
+    };
+
     const syncDimensions = () => {
       const scrollWidth = tableWrapElement.scrollWidth;
       const clientWidth = tableWrapElement.clientWidth;
       const hasHorizontalOverflow = scrollWidth > clientWidth + 1;
+      const nativeScrollbarVisible = isNativeScrollbarVisible();
 
       setMatrixScrollbarWidth(scrollWidth);
-      setShowMatrixStickyScrollbar(hasHorizontalOverflow);
+      setShowMatrixStickyScrollbar(hasHorizontalOverflow && !nativeScrollbarVisible);
 
       if (hasHorizontalOverflow) {
         stickyScrollbarElement.scrollLeft = tableWrapElement.scrollLeft;
@@ -198,6 +208,7 @@ export function HostSummaryPage({
     tableWrapElement.addEventListener('scroll', onTableScroll, { passive: true });
     stickyScrollbarElement.addEventListener('scroll', onStickyScrollbarScroll, { passive: true });
     window.addEventListener('resize', syncDimensions);
+    window.addEventListener('scroll', syncDimensions, { passive: true });
     syncDimensions();
 
     return () => {
@@ -205,6 +216,7 @@ export function HostSummaryPage({
       tableWrapElement.removeEventListener('scroll', onTableScroll);
       stickyScrollbarElement.removeEventListener('scroll', onStickyScrollbarScroll);
       window.removeEventListener('resize', syncDimensions);
+      window.removeEventListener('scroll', syncDimensions);
     };
   }, [rankedDateSummaries.length, users.length]);
 
