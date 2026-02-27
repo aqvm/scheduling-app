@@ -42,3 +42,17 @@ export function getStatusScore(status: AvailabilityStatus): number {
 
   return 0;
 }
+
+const STATUS_CYCLE: AvailabilityStatus[] = ['available', 'maybe', 'unavailable', 'unspecified'];
+
+/**
+ * Returns the next availability state in the click-toggle cycle.
+ */
+export function getNextStatusInCycle(status: AvailabilityStatus): AvailabilityStatus {
+  const currentIndex = STATUS_CYCLE.indexOf(status);
+  if (currentIndex < 0) {
+    return STATUS_CYCLE[0];
+  }
+
+  return STATUS_CYCLE[(currentIndex + 1) % STATUS_CYCLE.length];
+}
