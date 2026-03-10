@@ -56,3 +56,22 @@ export function getNextStatusInCycle(status: AvailabilityStatus): AvailabilitySt
 
   return STATUS_CYCLE[(currentIndex + 1) % STATUS_CYCLE.length];
 }
+
+/**
+ * Compact label used in dense table/cell layouts.
+ */
+export function getCompactStatusLabel(status: AvailabilityStatus): string {
+  if (status === 'available') {
+    return 'Avail';
+  }
+
+  if (status === 'unavailable') {
+    return 'No';
+  }
+
+  if (status === 'unspecified') {
+    return 'Unset';
+  }
+
+  return 'Maybe';
+}
