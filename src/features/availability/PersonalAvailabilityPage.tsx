@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { PAINT_OPTIONS, WEEKDAY_LABELS } from '../../shared/scheduler/constants';
 import { formatDateKey, getMonthLabel, toDateKey } from '../../shared/scheduler/date';
 import { MonthNavigator } from '../../shared/scheduler/MonthNavigator';
-import { getStatusLabel } from '../../shared/scheduler/status';
+import { getCompactStatusLabel, getStatusLabel } from '../../shared/scheduler/status';
 import type { AvailabilityStatus, UserProfile } from '../../shared/scheduler/types';
 
 /**
@@ -69,20 +69,6 @@ type PersonalAvailabilityPageProps = {
    */
   onSaveChanges: () => void;
 };
-
-function getCompactStatusLabel(status: AvailabilityStatus): string {
-  switch (status) {
-    case 'available':
-      return 'Avail';
-    case 'unavailable':
-      return 'No';
-    case 'unspecified':
-      return 'Unset';
-    case 'maybe':
-    default:
-      return 'Maybe';
-  }
-}
 
 /**
  * Calendar editing view where users manage their own availability.
@@ -268,3 +254,4 @@ export function PersonalAvailabilityPage({
     </section>
   );
 }
+

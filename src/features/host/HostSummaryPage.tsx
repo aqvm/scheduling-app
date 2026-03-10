@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDateKey, getMonthDates, getMonthLabel, toDateKey } from '../../shared/scheduler/date';
 import { MonthNavigator } from '../../shared/scheduler/MonthNavigator';
-import { getStatusLabel, getStatusScore } from '../../shared/scheduler/status';
+import { getCompactStatusLabel, getStatusLabel, getStatusScore } from '../../shared/scheduler/status';
 import type { AvailabilityStatus, UserProfile } from '../../shared/scheduler/types';
 
 /**
@@ -28,20 +28,6 @@ type HostSummaryPageProps = {
   monthDateKeys: string[];
   getStatus: (userId: string, dateKey: string) => AvailabilityStatus;
 };
-
-function getCompactStatusLabel(status: AvailabilityStatus): string {
-  switch (status) {
-    case 'available':
-      return 'Avail';
-    case 'unavailable':
-      return 'No';
-    case 'unspecified':
-      return 'Unset';
-    case 'maybe':
-    default:
-      return 'Maybe';
-  }
-}
 
 /**
  * Read-only analytics view for host/admin users.
@@ -331,3 +317,4 @@ export function HostSummaryPage({
     </section>
   );
 }
+
