@@ -1,144 +1,117 @@
-# Scheduling App
+# DnD Group Scheduler
 
-Invite-only DnD scheduling app built with React + TypeScript + Vite + Firebase.
+An invite-only availability board for tabletop groups that need to find the next session date without a spreadsheet, chat thread, or poll getting stale.
 
-## Features
+The app is intentionally small: members mark their availability, the host sees a ranked summary, and admins manage campaigns, invites, host assignment, and membership. The technical choices are all in service of that loop.
 
-- Google sign-in + campaign invite-code onboarding
-- Multi-campaign membership with global campaign selector
-- User-provided display names (no email/profile PII persisted in Firestore)
-- One invite code per campaign, with admin enable/disable controls
-- Dark-mode calendar UI
-- Paint-style availability editing (click or click-drag)
-- Sunday-first month grid with month picker
-- Past dates are locked/greyed out, and today is highlighted
-- Host summary view (host + admin access) with past-date filtering
-- Admin-only campaign management to create campaigns, assign host, and remove members
-- Realtime shared state across browser profiles/devices via Firestore
+## Try It
 
-## Firebase Setup
+To try the app without creating a campaign, sign in and join the `demo` campaign with invite code `E3N4-PANB-WUZH`.
 
-1. Create a Firebase project.
-2. In Firebase Console, enable `Authentication -> Sign-in method -> Google`.
-3. In Firebase Console, add your deployed domain under `Authentication -> Settings -> Authorized domains`.
-4. Create a Firestore database in production mode.
-5. Copy `.env.example` to `.env.local` and fill in your Firebase values.
-6. In GitHub repo settings, add Actions secrets for Firebase (list below).
-7. Set your OAuth privacy policy URL to:
-   - `https://<your-domain>/privacy-policy.html`
-   - For GitHub Pages, this is typically `https://<username>.github.io/scheduling-app/privacy-policy.html`.
+## Why This Exists
 
-Required env vars:
+Scheduling a DnD session is mostly a coordination problem, not a calendar problem. The group needs a shared source of truth that is easy for players to update and easy for the host to read.
 
-```bash
-VITE_FIREBASE_API_KEY=
-VITE_FIREBASE_AUTH_DOMAIN=
-VITE_FIREBASE_PROJECT_ID=
-VITE_FIREBASE_APP_ID=
-```
+This app optimizes for:
 
-Optional env vars:
+- Fast player input: click or drag across a month to paint availability as available, maybe, unavailable, or clear.
+- Host clarity: hide past dates, rank future options, and show the full availability matrix when the host needs detail.
+- Private group access: campaigns are invite-only, and invite codes can be disabled by admins.
+- Minimal personal data: the app stores Firebase auth user IDs and user-chosen aliases, not email addresses or Google profile details.
+- Low-ops hosting: static React frontend, Firebase Auth, and Firestore realtime state.
 
-```bash
-VITE_FIREBASE_STORAGE_BUCKET=
-VITE_FIREBASE_MESSAGING_SENDER_ID=
-VITE_FIREBASE_APP_NAMESPACE=default
-```
+## Main Technical Decisions
 
-Suggested Firestore security rules for this app:
+### React + Vite for a Small Client App
+
+The app is a single-page React application because almost all of the complexity is interaction state: selecting campaigns, editing availability, reading realtime updates, and switching between member, host, and admin views. Vite keeps local development and GitHub Pages deployment simple.
+
+### Firebase Auth for Identity, Not Profiles
+
+Google sign-in answers one question: "Is this the same person who joined before?" The app does not persist email addresses or Google profile metadata in Firestore. A signed-in user gets an in-app alias, and campaign membership can carry a campaign-specific alias.
+
+### Firestore as the Shared Realtime Model
+
+Firestore is the backend because this app needs live shared state but does not need a custom server. Campaigns, memberships, availability, invites, settings, and name-change requests are stored under a namespace:
 
 ```txt
-Copy from `firestore.rules` in this repo.
+apps/{namespace}/...
 ```
 
-GitHub Actions secrets expected by `.github/workflows/deploy.yml`:
+That namespace lets the same Firebase project host separate app partitions when needed.
 
-Required:
+### Invite-Only Campaigns
 
-- `VITE_FIREBASE_API_KEY`
-- `VITE_FIREBASE_AUTH_DOMAIN`
-- `VITE_FIREBASE_PROJECT_ID`
-- `VITE_FIREBASE_APP_ID`
+Campaigns are the core boundary. Admins create campaigns, each campaign gets one invite code, and players join through that code. Disabling the code stops new joins without removing existing members.
 
-Optional:
+### Security Rules Carry the Trust Model
 
-- `VITE_FIREBASE_STORAGE_BUCKET`
-- `VITE_FIREBASE_MESSAGING_SENDER_ID`
-- `VITE_FIREBASE_APP_NAMESPACE` (defaults to `default`)
+The frontend is not trusted to enforce authorization alone. Firestore rules define who can read, create, update, and delete each document type:
 
-GitHub Actions secrets expected by `.github/workflows/deploy-firestore-rules.yml`:
+- Members can read campaign data only for campaigns they belong to.
+- Members can write only their own availability.
+- Admins can create campaigns, manage invites, assign hosts, review name-change requests, and remove members.
 
-Required:
+The host summary is a product-level view layered on top of campaign-scoped data: the UI exposes it only to the selected host and admins, while Firestore rules keep the underlying data scoped to campaign members and admins.
 
-- `FIREBASE_PROJECT_ID` (or repo variable `FIREBASE_PROJECT_ID`)
-- `FIREBASE_SERVICE_ACCOUNT` (JSON service account credential with Firestore rules deploy permissions)
+### Local Pending Edits Before Save
 
-## Firestore Rules Deploy (Optional CLI)
+Availability editing keeps unsaved changes locally until the player saves. That makes painting dates feel responsive while still preserving an explicit "commit these changes" action.
 
-If you want rules versioned/deployed from this repo:
+## Application Shape
 
-1. Install Firebase CLI:
+The code is organized around product features rather than technical layers:
 
-```bash
-npm i -g firebase-tools
-```
+- `src/features/auth`: Google sign-in entry point.
+- `src/features/availability`: member availability editor.
+- `src/features/host`: host summary and ranked date matrix.
+- `src/features/admin`: campaign and membership management.
+- `src/features/app`: app-level hooks, orchestration, and Firestore operations.
+- `src/shared/scheduler`: shared scheduler types, date helpers, validation, status logic, and Firestore reference builders.
 
-2. Copy `.firebaserc.example` to `.firebaserc` and set your Firebase project ID.
-3. Login and deploy rules:
+The main runtime flow starts in `src/App.tsx`: authenticate, resolve the current user's profile and memberships, select a campaign, then render the member, host, or admin view based on role and campaign state.
 
-```bash
-firebase login
-firebase deploy --only firestore:rules
-```
+## Core Data Model
 
-## Admin Bootstrap + Invite Codes
+The app stores a small set of document types:
 
-Initial admin bootstrap (required once per namespace):
+- `users`: app-local profile with alias and role.
+- `campaigns`: campaign name, invite code, invite state, and creator.
+- `campaignInvites`: lookup documents for invite-code joins.
+- `memberships`: campaign/user joins with campaign-specific aliases.
+- `availability`: per-user availability maps keyed by `YYYY-MM-DD`.
+- `campaignSettings`: campaign host assignment.
+- `nameChangeRequests`: admin-reviewed alias changes.
 
-- New user profiles are created with role `member` by design.
-- After the first user signs in, promote that user to `admin` out-of-band (Firebase Console or Admin SDK).
-- After an admin exists, use `Campaign Management` in-app to create campaigns and invite codes.
+Shared TypeScript contracts live in `src/shared/scheduler/types.ts`, and Firestore path helpers live in `src/shared/scheduler/firebaseRefs.ts`.
 
-Invite-code flow:
-
-- Admins create campaigns from `Campaign Management` in the app UI.
-- Each campaign gets a single invite code that can be enabled or disabled.
-- Users who sign in with a campaign invite code are added to that campaign.
-
-## Data Minimization
-
-- Firestore persists only user-chosen display name alias + uid-based membership linkage.
-- Email addresses and other direct profile identifiers are not stored in app documents.
-- Existing historical records created before this policy change should be scrubbed/migrated.
-
-## Run locally
+## Local Development
 
 ```bash
 npm ci
 npm run dev
 ```
 
-## Build locally
+Create `.env.local` from `.env.example` and fill in the Firebase web app values before running against a real Firebase project.
+
+## Useful Commands
 
 ```bash
 npm run build
 npm run preview
 ```
 
-## Deploy to GitHub Pages
+## Setup And Operations
 
-1. Push this repository to GitHub on the `main` branch.
-2. In GitHub, open `Settings -> Pages`.
-3. Set `Source` to `GitHub Actions`.
-4. Push to `main` (or re-run the workflow in `Actions`).
-5. Your site will be published after the `Deploy to GitHub Pages` workflow completes.
+Operational details live in [docs/setup.md](docs/setup.md):
 
-## Repo Name Note
+- Firebase project setup
+- Environment variables
+- Admin bootstrap
+- Firestore rules deployment
+- GitHub Pages deployment
+- Repository-name deployment note
 
-`vite.config.ts` currently uses:
+## Privacy Posture
 
-```ts
-base: '/scheduling-app/'
-```
-
-If your GitHub repository name changes, update that value to match the new repo path.
+The app's privacy stance is deliberately narrow: store only what the scheduler needs. Current app documents should contain user-chosen aliases, Firebase auth UIDs, campaign membership, and availability statuses. Historical records from older data models should be scrubbed if they contain direct profile identifiers.
