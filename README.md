@@ -6,7 +6,7 @@ The app is intentionally small: members mark their availability, the host sees a
 
 ## Try It
 
-To try the app without creating a campaign, sign in and join the `demo` campaign with invite code `E3N4-PANB-WUZH`.
+Try the live app at [aqvm.github.io/scheduling-app](https://aqvm.github.io/scheduling-app/). To join without creating a campaign, sign in and use the `demo` campaign invite code `E3N4-PANB-WUZH`.
 
 ## Why This Exists
 
